@@ -1,0 +1,24 @@
+services:
+  alphabot:
+    build: .
+    container_name: alphabot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./logs:/app/logs
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/status', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3

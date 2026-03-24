@@ -1,0 +1,68 @@
+# AlphaBot Strategy Configuration (non-secret parameters)
+# Override defaults from config.py
+
+regime_detection:
+  adx_period: 14
+  atr_period: 14
+  bb_period: 20
+  bb_std: 2
+  adx_trending_threshold: 25
+  adx_ranging_threshold: 20
+  atr_volatility_multiplier: 2.0   # ATR spike > 2x 20-period avg = high vol
+
+strategies:
+  ema_crossover:
+    ema_fast: 20
+    ema_slow: 50
+    adx_min: 25
+    volume_multiplier: 1.2
+    atr_sl_multiplier: 1.5
+    atr_tp_multiplier: 3.0
+
+  bb_reversion:
+    bb_period: 20
+    bb_std: 2
+    rsi_period: 14
+    rsi_oversold: 35
+    rsi_overbought: 65
+    stoch_rsi_oversold: 20
+    stoch_rsi_overbought: 80
+
+  atr_breakout:
+    atr_period: 14
+    volume_multiplier: 2.0
+    atr_sl_multiplier: 2.0
+    trailing_atr_multiplier: 2.0
+
+signal_scoring:
+  regime_alignment_weight: 30
+  primary_indicator_weight: 25
+  confirmation_weight: 20
+  volume_weight: 15
+  higher_tf_weight: 10
+  min_confidence: 60
+
+risk:
+  risk_per_trade_pct: 1.0
+  max_risk_per_trade_pct: 2.0
+  daily_loss_cap_pct: 2.0
+  max_drawdown_pct: 5.0
+  max_concurrent_positions: 3
+  max_leverage: 5
+  min_risk_reward: 1.5
+  max_consecutive_losses: 3
+  consecutive_loss_cooldown_minutes: 30
+  high_volatility_risk_reduction: 0.5
+  time_stop_hours: 4
+  time_stop_progress_pct: 20
+
+take_profit:
+  tp1_r_multiple: 1.0
+  tp1_close_pct: 50
+  tp2_r_multiple: 2.0
+  tp2_close_pct: 30
+  trailing_pct: 20
+
+cooldown:
+  min_candles_between_trades: 1
+  stale_order_minutes: 30

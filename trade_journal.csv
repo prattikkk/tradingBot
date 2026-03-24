@@ -1,0 +1,2 @@
+trade_id,symbol,side,entry_price,exit_price,quantity,leverage,gross_pnl,fees,net_pnl,pnl_percent,duration_minutes,strategy,regime,signal_confidence,close_reason,daily_pnl_after,session_drawdown_after
+59da53f7-99f,ETHUSDT,SHORT,2119.55,2135.58,0.187,5,-14.988049999999761,0.318408,-15.306457999999761,-3.861796918097654,51.08797995,ema_crossover,TRENDING_DOWN,61.0,SL_HIT,0.0,0.0

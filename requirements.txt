@@ -1,0 +1,51 @@
+# AlphaBot - Adaptive Algorithmic Trading System
+# Python 3.11+ required
+
+# Exchange API
+ccxt>=4.4.53
+python-binance>=1.0.19
+websockets>=13.1
+aiohttp>=3.10.0
+
+# Data Processing
+pandas>=2.2.3
+numpy>=1.26.4
+
+# Technical Indicators
+pandas-ta-classic>=0.4.47
+
+# Async Runtime
+asyncio-throttle>=1.0.2
+
+# Configuration
+pydantic>=2.10.4
+pydantic-settings>=2.7.1
+python-dotenv>=1.0.1
+PyYAML>=6.0.2
+
+# Database
+SQLAlchemy>=2.0.36
+
+# Logging
+loguru>=0.7.3
+
+# Dashboard
+fastapi>=0.115.6
+uvicorn>=0.34.0
+jinja2>=3.1.5
+
+# Terminal UI
+rich>=13.9.4
+
+# Notifications
+python-telegram-bot>=21.9
+
+# Scheduler
+APScheduler>=3.10.4
+
+# Testing
+pytest>=8.3.4
+pytest-asyncio>=0.25.0
+
+# Containerization (optional)
+# docker-compose via docker-compose.yml

@@ -1,0 +1,312 @@
+"""
+AlphaBot — Entry Point.
+Starts all async services: data feed, strategy engine, position manager,
+dashboard, and Telegram notifications.
+
+Handles Ctrl+C gracefully: closes all positions, cancels orders, saves state.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import datetime
+import signal
+import sys
+from decimal import Decimal
+from typing import Optional
+
+from loguru import logger
+
+
+async def main() -> None:
+    """Main async entry point — wires all modules and starts the bot."""
+
+    # ---- 1. Config & Logger ----
+    from alphabot.config import settings
+    from alphabot.utils.logger import setup_logger
+    setup_logger()
+
+    logger.info("=" * 60)
+    logger.info("   ⚡ AlphaBot — Adaptive Algorithmic Trading System")
+    logger.info(f"   Environment: {settings.environment.upper()}")
+    logger.info(f"   Pairs: {', '.join(settings.trading_pairs)}")
+    logger.info(f"   Timeframe: {settings.primary_timeframe}")
+    logger.info(f"   Max Leverage: {settings.max_leverage}x")
+    logger.info(f"   Risk Per Trade: {settings.risk_per_trade_pct}%")
+    logger.info("=" * 60)
+
+    # ---- 2. Database ----
+    from alphabot.database.db import Database
+    db = Database()
+    logger.info("Database initialized")
+
+    # ---- 3. Data Store ----
+    from alphabot.data.data_store import DataStore
+    data_store = DataStore()
+
+    # ---- 4. Regime Detector ----
+    from alphabot.regime.detector import RegimeDetector
+    regime_detector = RegimeDetector(data_store)
+
+    # ---- 5. Strategy Engine ----
+    from alphabot.strategies.engine import StrategyEngine
+    strategy_engine = StrategyEngine(data_store, regime_detector)
+
+    # ---- 6. Risk Manager ----
+    from alphabot.risk.risk_manager import RiskManager
+    risk_manager = RiskManager(db)
+
+    # ---- 7. PnL Tracker ----
+    from alphabot.positions.pnl_tracker import PnLTracker
+    pnl_tracker = PnLTracker(db)
+
+    # ---- 8. Exchange Client ----
+    from alphabot.execution.testnet_client import BinanceTestnetClient
+    client = BinanceTestnetClient()
+    await client.connect()
+
+    # Get initial balance
+    try:
+        balance = await client.get_usdt_balance()
+        logger.info(f"Account balance: ${balance:,.2f} USDT")
+    except Exception as e:
+        logger.warning(f"Could not fetch balance (using default): {e}")
+        balance = 10000.0  # Testnet default
+
+    risk_manager.initialize(Decimal(str(balance)))
+
+    # ---- 9. Order Executor ----
+    from alphabot.execution.order_executor import OrderExecutor
+    order_executor = OrderExecutor(client)
+
+    # ---- 10. Position Manager ----
+    from alphabot.positions.position_manager import PositionManager
+    position_manager = PositionManager(
+        data_store=data_store,
+        database=db,
+        risk_manager=risk_manager,
+        pnl_tracker=pnl_tracker,
+        order_executor=order_executor,
+    )
+
+    # ---- 11. Telegram Notifier ----
+    from alphabot.notifications.telegram_bot import TelegramNotifier
+    notifier = TelegramNotifier()
+    await notifier.start()
+    position_manager.set_notifier(notifier)
+
+    # ---- 12. Dashboard ----
+    from alphabot.dashboard.terminal_ui import TerminalUI
+    from alphabot.dashboard.api import DashboardServer
+    terminal_ui = TerminalUI()
+    await terminal_ui.start()
+
+    start_time = datetime.datetime.now(datetime.UTC)
+
+    def get_dashboard_state() -> dict:
+        """Collect full bot state for dashboard."""
+        stats = pnl_tracker.get_stats()
+        risk_status = risk_manager.get_status()
+        recent = db.get_trades(limit=20)
+        trade_dicts = []
+        for t in recent:
+            trade_dicts.append({
+                "symbol": t.symbol,
+                "direction": t.direction,
+                "net_pnl": t.net_pnl,
+                "exit_reason": t.exit_reason,
+                "duration_minutes": t.duration_minutes,
+                "strategy_name": t.strategy_name,
+            })
+
+        bot_status = "ACTIVE"
+        if risk_manager.is_halted:
+            bot_status = "MAX_DRAWDOWN"
+        elif risk_manager.is_daily_halted:
+            bot_status = "DAILY_CAP"
+
+        uptime = str(datetime.datetime.now(datetime.UTC) - start_time).split(".")[0]
+
+        return {
+            "bot_status": bot_status,
+            "uptime": uptime,
+            "balance": balance,
+            "daily_pnl": risk_status.get("daily_pnl", 0),
+            "total_pnl": stats.get("total_pnl", 0),
+            "drawdown": 0.0,
+            "regimes": regime_detector.get_current_regimes() if hasattr(regime_detector, 'get_current_regimes') else regime_detector._last_regime,
+            "open_positions": position_manager.open_positions_dicts,
+            "recent_trades": trade_dicts,
+            "stats": stats,
+            "risk_status": risk_status,
+            "last_signal_time": "N/A",
+        }
+
+    dashboard_server = DashboardServer(get_dashboard_state)
+    await dashboard_server.start(settings.dashboard_host, settings.dashboard_port)
+
+    # ---- 13. Candle Close Callback ----
+    async def on_candle_close(candle) -> None:
+        """Called on every candle close — runs the trading loop."""
+        nonlocal balance
+
+        symbol = candle.symbol
+        logger.info(f"--- Candle closed: {symbol} {candle.timeframe} C={candle.close} ---")
+
+        # Skip if halted
+        if risk_manager.is_halted:
+            logger.warning(f"Bot halted — skipping signal evaluation for {symbol}")
+            return
+
+        if risk_manager.is_daily_halted:
+            logger.warning(f"Daily cap hit — skipping signal evaluation for {symbol}")
+            return
+
+        # Only process primary timeframe candles
+        if candle.timeframe != settings.primary_timeframe:
+            return
+
+        # Generate signal
+        signal = strategy_engine.evaluate(symbol)
+        if signal is None:
+            return
+
+        # Validate with Risk Manager
+        open_pos_dicts = [p.to_dict() for p in position_manager.open_positions]
+        total_exp = position_manager.total_exposure
+
+        approved, reason, size_info = risk_manager.validate_signal(
+            signal=signal,
+            account_balance=Decimal(str(balance)),
+            open_positions=open_pos_dicts,
+            existing_exposure=total_exp,
+        )
+
+        if not approved:
+            logger.info(f"Signal rejected for {symbol}: {reason}")
+            return
+
+        # Open position
+        pos = await position_manager.open_position(signal, size_info)
+        if pos:
+            logger.info(f"Position opened: {pos.id} {pos.symbol} {pos.direction}")
+
+    # ---- 14. WebSocket Data Feed ----
+    from alphabot.data.websocket_client import BinanceWebSocketClient
+    ws_client = BinanceWebSocketClient(data_store, on_candle_close=on_candle_close)
+    await ws_client.start()
+
+    # ---- 15. Position Monitor ----
+    await position_manager.start_monitor()
+
+    # ---- 16. Terminal UI ----
+    # Run terminal UI update loop
+    async def ui_update_loop():
+        while True:
+            try:
+                terminal_ui.update_state(get_dashboard_state())
+            except Exception as e:
+                logger.error(f"UI update error: {e}")
+            await asyncio.sleep(2)
+
+    ui_task = asyncio.create_task(ui_update_loop())
+
+    # ---- 17. Daily Reset Scheduler ----
+    async def daily_reset_loop():
+        """Reset daily limits at UTC midnight."""
+        while True:
+            now = datetime.datetime.now(datetime.UTC)
+            tomorrow = (now + datetime.timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            sleep_seconds = (tomorrow - now).total_seconds()
+            await asyncio.sleep(sleep_seconds)
+            risk_manager.reset_daily()
+            logger.info("Daily limits reset at UTC midnight")
+            # Send daily summary
+            try:
+                stats = pnl_tracker.get_stats()
+                await notifier.notify_daily_summary(stats)
+            except Exception as e:
+                logger.error(f"Daily summary error: {e}")
+
+    daily_task = asyncio.create_task(daily_reset_loop())
+
+    # ---- 18. Stale Order Cleanup Scheduler ----
+    async def stale_order_cleanup():
+        """Clean up stale orders every 5 minutes."""
+        while True:
+            await asyncio.sleep(300)
+            for symbol in settings.trading_pairs:
+                try:
+                    await order_executor.cleanup_stale_orders(
+                        symbol, settings.stale_order_minutes
+                    )
+                except Exception as e:
+                    logger.error(f"Stale order cleanup error for {symbol}: {e}")
+
+    cleanup_task = asyncio.create_task(stale_order_cleanup())
+
+    # ---- 19. Graceful Shutdown Handler ----
+    shutdown_event = asyncio.Event()
+
+    def handle_shutdown(sig, frame):
+        logger.warning(f"Received signal {sig} — initiating graceful shutdown...")
+        shutdown_event.set()
+
+    # Register signal handlers
+    if sys.platform != "win32":
+        loop = asyncio.get_event_loop()
+        loop.add_signal_handler(signal.SIGINT, lambda: shutdown_event.set())
+        loop.add_signal_handler(signal.SIGTERM, lambda: shutdown_event.set())
+    else:
+        signal.signal(signal.SIGINT, handle_shutdown)
+        signal.signal(signal.SIGTERM, handle_shutdown)
+
+    logger.info("🚀 AlphaBot is running! Press Ctrl+C to stop.")
+
+    # ---- 20. Main Wait ----
+    try:
+        await shutdown_event.wait()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+
+    # ---- 21. Graceful Shutdown ----
+    logger.info("Shutting down gracefully...")
+
+    # Close all positions
+    if position_manager.open_positions:
+        logger.info(f"Closing {len(position_manager.open_positions)} open positions...")
+        await position_manager.close_all_positions(reason="BOT_SHUTDOWN")
+
+    # Cancel all outstanding orders
+    for symbol in settings.trading_pairs:
+        try:
+            await order_executor.cancel_all_orders(symbol)
+        except Exception as e:
+            logger.error(f"Error cancelling orders for {symbol}: {e}")
+
+    # Stop components
+    await position_manager.stop_monitor()
+    await ws_client.stop()
+    await dashboard_server.stop()
+    await terminal_ui.stop()
+    await notifier.stop()
+    await client.close()
+
+    # Cancel background tasks
+    for task in [ui_task, daily_task, cleanup_task]:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    logger.info("✅ AlphaBot shut down cleanly. Goodbye!")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nAlphaBot stopped.")
