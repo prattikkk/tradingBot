@@ -58,7 +58,21 @@ class PullbackMomentumStrategy(BaseStrategy):
 
         htf_bias, htf_score = self._htf_trend_bias(higher_tf_df)
         if htf_bias is None:
-            dbg("htf_bias_none")
+            try:
+                htf_cur = higher_tf_df.iloc[-1]
+                htf_ema_fast = float(htf_cur.get("ema_fast", 0))
+                htf_ema_slow = float(htf_cur.get("ema_slow", 0))
+                htf_slope = float(htf_cur.get("ema_fast_slope", 0))
+                htf_adx_col = [c for c in higher_tf_df.columns if c.startswith("ADX_")]
+                htf_adx = float(htf_cur[htf_adx_col[0]]) if htf_adx_col else 0.0
+                dbg(
+                    "htf_bias_none "
+                    f"ema_fast={htf_ema_fast:.4f} ema_slow={htf_ema_slow:.4f} "
+                    f"slope={htf_slope:.6f} adx={htf_adx:.2f} "
+                    f"adx_min={float(settings.pmc_adx_min_htf):.2f}"
+                )
+            except Exception:
+                dbg("htf_bias_none")
             return None
 
         close = float(cur["close"])
