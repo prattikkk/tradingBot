@@ -27,7 +27,8 @@ from alphabot.utils.indicators import compute_all_indicators
 REGIME_STRATEGY_MAP: Dict[MarketRegime, List[type]] = {
     MarketRegime.TRENDING_UP: [PullbackMomentumStrategy, EMACrossoverStrategy],
     MarketRegime.TRENDING_DOWN: [PullbackMomentumStrategy, EMACrossoverStrategy],
-    MarketRegime.RANGING: [BBReversionStrategy],
+    # Balanced option: allow PMC to run in RANGING, but it will self-filter via HTF bias gates.
+    MarketRegime.RANGING: [PullbackMomentumStrategy, BBReversionStrategy],
     MarketRegime.HIGH_VOLATILITY: [ATRBreakoutStrategy],
     MarketRegime.UNCLEAR: [],  # No trades in unclear regime
 }
