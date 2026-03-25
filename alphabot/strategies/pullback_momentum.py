@@ -28,9 +28,29 @@ class PullbackMomentumStrategy(BaseStrategy):
         timeframe: str,
         higher_tf_df: Optional[pd.DataFrame] = None,
     ) -> Optional[Signal]:
+        # Rate-limit per (symbol,timeframe) to avoid log spam: log at most once per candle timestamp.
+        key = f"{symbol}:{timeframe}"
+        candle_ts = None
+        try:
+            candle_ts = str(df.iloc[-1].get("timestamp"))
+        except Exception:
+            candle_ts = None
+
+        def dbg(reason: str) -> None:
+            if not candle_ts:
+                return
+            last = getattr(self, "_pmc_last_dbg", {})
+            if last.get(key) == candle_ts:
+                return
+            last[key] = candle_ts
+            setattr(self, "_pmc_last_dbg", last)
+            logger.info(f"[{self.name}] {symbol} {timeframe} blocked: {reason}")
+
         if higher_tf_df is None or higher_tf_df.empty or len(higher_tf_df) < 80:
+            dbg("htf_df_missing")
             return None
         if len(df) < 100:
+            dbg("ltf_df_insufficient")
             return None
 
         cur = df.iloc[-1]
@@ -38,6 +58,7 @@ class PullbackMomentumStrategy(BaseStrategy):
 
         htf_bias, htf_score = self._htf_trend_bias(higher_tf_df)
         if htf_bias is None:
+            dbg("htf_bias_none")
             return None
 
         close = float(cur["close"])
@@ -47,20 +68,24 @@ class PullbackMomentumStrategy(BaseStrategy):
         ema_fast = float(cur.get("ema_fast", 0))
         atr_val = float(cur.get("atr", 0))
         if ema_fast <= 0 or atr_val <= 0:
+            dbg("missing_ema_or_atr")
             return None
 
         pullback_ok, pullback_score = self._check_pullback(htf_bias, close, high, low, ema_fast, atr_val, df)
         if not pullback_ok:
+            dbg("pullback_fail")
             return None
 
         rsi_now = float(cur.get("rsi", 50))
         rsi_prev = float(prev.get("rsi", 50))
         rsi_ok, rsi_score = self._check_rsi(htf_bias, rsi_now, rsi_prev)
         if not rsi_ok:
+            dbg("rsi_fail")
             return None
 
         candle_ok, candle_score = self._check_candle(htf_bias, open_, close, high, low)
         if not candle_ok:
+            dbg("candle_fail")
             return None
 
         volume_now = float(cur.get("volume", 0))
@@ -68,6 +93,7 @@ class PullbackMomentumStrategy(BaseStrategy):
         vol_ratio = volume_now / vol_sma if vol_sma > 0 else 0
         vol_mult = float(settings.pmc_volume_multiplier)
         if vol_ratio < vol_mult:
+            dbg(f"volume_fail ratio={vol_ratio:.2f}x < mult={vol_mult:.2f}x")
             return None
         vol_score = min(vol_ratio / (vol_mult * 1.5), 1.0)
 
@@ -95,6 +121,7 @@ class PullbackMomentumStrategy(BaseStrategy):
         )
 
         if confidence < settings.min_signal_confidence:
+            dbg(f"confidence_fail conf={confidence:.1f} < min={float(settings.min_signal_confidence):.1f}")
             return None
 
         sl_mult = float(settings.pmc_atr_sl_multiplier)
@@ -113,6 +140,8 @@ class PullbackMomentumStrategy(BaseStrategy):
         sl_dist = abs(close - sl)
         tp_dist = abs(close - tp1)
         if sl_dist == 0 or (tp_dist / sl_dist) < float(settings.min_risk_reward):
+            rr = (tp_dist / sl_dist) if sl_dist else 0.0
+            dbg(f"rr_fail rr={rr:.2f} < min={float(settings.min_risk_reward):.2f}")
             return None
 
         signal = Signal(
