@@ -64,5 +64,5 @@ take_profit:
   trailing_pct: 20
 
 cooldown:
-  min_candles_between_trades: 1
+  min_candles_between_trades: 2
   stale_order_minutes: 30

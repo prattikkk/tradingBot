@@ -17,7 +17,7 @@ from alphabot.database.db import Database
 from alphabot.database.models import TradeRecord
 
 
-_JOURNAL_PATH = Path(__file__).resolve().parent.parent.parent / "trade_journal.csv"
+_JOURNAL_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "trade_journal.csv"
 
 _JOURNAL_HEADERS = [
     "trade_id", "symbol", "side", "entry_price", "exit_price",
@@ -44,6 +44,7 @@ class PnLTracker:
 
     def _ensure_journal(self) -> None:
         """Create CSV journal file with headers if it doesn't exist."""
+        _JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
         if not _JOURNAL_PATH.exists():
             with open(_JOURNAL_PATH, "w", newline="") as f:
                 writer = csv.writer(f)

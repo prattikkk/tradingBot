@@ -150,12 +150,13 @@ class RiskManager:
             self._log_rejection(signal, reason)
             return False, reason, {}
 
-        # ---- Correlation block: same direction on same pair ----
+        # ---- Symbol block: one active position per pair ----
         for pos in open_positions:
-            if (pos.get("symbol") == signal.symbol and
-                pos.get("direction") == signal.direction.value and
-                pos.get("status") in ("OPEN", "PARTIAL")):
-                reason = f"CORRELATION BLOCK — already {signal.direction.value} on {signal.symbol}"
+            if pos.get("symbol") == signal.symbol and pos.get("status") in ("OPEN", "PARTIAL"):
+                if pos.get("direction") == signal.direction.value:
+                    reason = f"CORRELATION BLOCK — already {signal.direction.value} on {signal.symbol}"
+                else:
+                    reason = f"SYMBOL BLOCK — opposite position already open on {signal.symbol}"
                 self._log_rejection(signal, reason)
                 return False, reason, {}
 
@@ -183,7 +184,7 @@ class RiskManager:
         )
 
         if size_info["quantity"] <= 0:
-            reason = "POSITION TOO SMALL — calculated quantity is zero"
+            reason = size_info.get("rejection_reason") or "POSITION TOO SMALL — calculated quantity is zero"
             self._log_rejection(signal, reason)
             return False, reason, {}
 

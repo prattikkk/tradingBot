@@ -81,10 +81,12 @@ class EMACrossoverStrategy(BaseStrategy):
         bullish_continuation = (
             ema_fast_now > ema_slow_now
             and ema_fast_slope > 0
+            and close > ema_fast_now
         )
         bearish_continuation = (
             ema_fast_now < ema_slow_now
             and ema_fast_slope < 0
+            and close < ema_fast_now
         )
 
         if not bullish_cross and not bearish_cross and not bullish_continuation and not bearish_continuation:
@@ -107,9 +109,23 @@ class EMACrossoverStrategy(BaseStrategy):
             direction == SignalDirection.SHORT and bearish_cross
         )
 
+        # Continuation entries are stricter to avoid chasing extended moves.
+        if not is_fresh_cross:
+            if direction == SignalDirection.LONG and macd_hist < 0.2:
+                return None
+            if direction == SignalDirection.SHORT and macd_hist > -0.2:
+                return None
+
+            max_extension = (atr_val * 1.2) if atr_val > 0 else (close * 0.003)
+            if abs(close - ema_fast_now) > max_extension:
+                return None
+
+            if vol_ratio < 1.1:
+                return None
+
         # --- Scoring ---
         regime_align = 1.0 if "TRENDING" in regime else 0.3
-        primary_score = 1.0 if is_fresh_cross else 0.8
+        primary_score = 1.0 if is_fresh_cross else 0.65
         if direction == SignalDirection.LONG:
             if macd_hist > 0.5:
                 confirm_score = 1.0

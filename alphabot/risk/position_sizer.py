@@ -62,8 +62,15 @@ class PositionSizer:
         sl_distance = abs(entry_price - stop_loss)
         if sl_distance == 0:
             logger.error("[Sizer] Stop-loss distance is zero — cannot size position")
-            return {"quantity": Decimal("0"), "size_usdt": Decimal("0"),
-                    "risk_amount": Decimal("0"), "leverage": lev, "risk_pct": risk_pct}
+            return {
+                "quantity": Decimal("0"),
+                "size_usdt": Decimal("0"),
+                "risk_amount": Decimal("0"),
+                "leverage": lev,
+                "risk_pct": risk_pct,
+                "rejection_code": "INVALID_STOP_DISTANCE",
+                "rejection_reason": "INVALID STOP DISTANCE — entry and stop-loss are equal",
+            }
 
         sl_distance_pct = sl_distance / entry_price
 
@@ -86,8 +93,18 @@ class PositionSizer:
             available = max_total_exposure - existing_exposure
             if available <= 0:
                 logger.warning("[Sizer] Max total exposure reached — no new position")
-                return {"quantity": Decimal("0"), "size_usdt": Decimal("0"),
-                        "risk_amount": Decimal("0"), "leverage": lev, "risk_pct": risk_pct}
+                return {
+                    "quantity": Decimal("0"),
+                    "size_usdt": Decimal("0"),
+                    "risk_amount": Decimal("0"),
+                    "leverage": lev,
+                    "risk_pct": risk_pct,
+                    "rejection_code": "EXPOSURE_CAP_HIT",
+                    "rejection_reason": (
+                        f"EXPOSURE CAP HIT — existing ${existing_exposure:.2f} >= "
+                        f"max ${max_total_exposure:.2f}"
+                    ),
+                }
             margin_required = available
             position_size_usdt = margin_required * Decimal(str(lev))
             logger.info(f"[Sizer] Position reduced to fit exposure limit: {position_size_usdt}")
@@ -103,6 +120,18 @@ class PositionSizer:
             Decimal("0.0001"), rounding=ROUND_DOWN
         )
 
+        if quantity <= 0:
+            logger.warning("[Sizer] Quantity rounded to zero after sizing")
+            return {
+                "quantity": Decimal("0"),
+                "size_usdt": position_size_usdt.quantize(Decimal("0.01"), rounding=ROUND_DOWN),
+                "risk_amount": risk_amount.quantize(Decimal("0.01"), rounding=ROUND_DOWN),
+                "leverage": lev,
+                "risk_pct": risk_pct,
+                "rejection_code": "POSITION_TOO_SMALL",
+                "rejection_reason": "POSITION TOO SMALL — calculated quantity rounded to zero",
+            }
+
         logger.info(
             f"[Sizer] Position sized: qty={quantity} usdt={position_size_usdt:.2f} "
             f"risk=${risk_amount:.2f} ({risk_pct}%) lev={lev}x margin={margin_required:.2f}"
@@ -114,4 +143,6 @@ class PositionSizer:
             "risk_amount": risk_amount.quantize(Decimal("0.01"), rounding=ROUND_DOWN),
             "leverage": lev,
             "risk_pct": risk_pct,
+            "rejection_code": None,
+            "rejection_reason": "",
         }

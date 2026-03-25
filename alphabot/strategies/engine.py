@@ -24,8 +24,8 @@ from alphabot.utils.indicators import compute_all_indicators
 
 # Regime → Strategy mapping
 REGIME_STRATEGY_MAP: Dict[MarketRegime, List[type]] = {
-    MarketRegime.TRENDING_UP: [EMACrossoverStrategy],
-    MarketRegime.TRENDING_DOWN: [EMACrossoverStrategy],
+    MarketRegime.TRENDING_UP: [EMACrossoverStrategy, ATRBreakoutStrategy],
+    MarketRegime.TRENDING_DOWN: [EMACrossoverStrategy, ATRBreakoutStrategy],
     MarketRegime.RANGING: [BBReversionStrategy],
     MarketRegime.HIGH_VOLATILITY: [ATRBreakoutStrategy],
     MarketRegime.UNCLEAR: [],  # No trades in unclear regime
@@ -102,10 +102,10 @@ class StrategyEngine:
         best_signal: Optional[Signal] = None
         for strategy_cls in strategy_classes:
             strategy_name = strategy_cls.name if hasattr(strategy_cls, 'name') else strategy_cls.__name__
-            strategy = self._strategies.get(
-                strategy_name,
-                strategy_cls()
-            )
+            strategy = self._strategies.get(strategy_name)
+            if strategy is None:
+                strategy = strategy_cls()
+                self._strategies[strategy_name] = strategy
             signal = strategy.generate_signal(
                 symbol=symbol,
                 df=df,
