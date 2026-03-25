@@ -43,7 +43,7 @@ strategies:
     rsi_confirmation_long: 48
     rsi_confirmation_short: 52
     volume_multiplier: 1.5
-    adx_min_htf: 20
+    adx_min_htf: 16
     atr_sl_multiplier: 1.5
     atr_tp1_multiplier: 2.5
     atr_tp2_multiplier: 4.0
