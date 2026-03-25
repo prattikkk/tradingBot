@@ -139,6 +139,26 @@ class Settings(BaseSettings):
         ge=20,
         le=200,
     )
+    rsi_oversold_long: int = Field(
+        default=_as_int(_yaml_get("strategies", "bb_reversion", "rsi_oversold", default=35), 35),
+        ge=20,
+        le=45,
+    )
+    rsi_overbought_short: int = Field(
+        default=_as_int(_yaml_get("strategies", "bb_reversion", "rsi_overbought", default=65), 65),
+        ge=55,
+        le=90,
+    )
+    stoch_rsi_oversold: int = Field(
+        default=_as_int(_yaml_get("strategies", "bb_reversion", "stoch_rsi_oversold", default=20), 20),
+        ge=5,
+        le=40,
+    )
+    stoch_rsi_overbought: int = Field(
+        default=_as_int(_yaml_get("strategies", "bb_reversion", "stoch_rsi_overbought", default=80), 80),
+        ge=60,
+        le=95,
+    )
 
     # ---- Dashboard ----
     dashboard_host: str = Field(default="0.0.0.0")

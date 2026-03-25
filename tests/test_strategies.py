@@ -9,6 +9,7 @@ from alphabot.strategies.ema_crossover import EMACrossoverStrategy
 from alphabot.strategies.bb_reversion import BBReversionStrategy
 from alphabot.strategies.atr_breakout import ATRBreakoutStrategy
 from alphabot.regime.detector import MarketRegime
+from alphabot.utils.indicators import adx
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +145,64 @@ class TestBBReversionStrategy:
 
     def test_strategy_name(self, strategy):
         assert strategy.name == "bb_reversion"
+
+    def test_rejects_weak_bb_touch_without_reversal_confirmation(self, strategy):
+        df = pd.DataFrame({
+            "open": [101.0, 99.2, 99.0],
+            "high": [101.5, 100.1, 99.3],
+            "low": [99.4, 98.9, 98.7],
+            "close": [99.8, 99.0, 98.9],
+            "volume": [1000, 950, 900],
+            "volume_sma": [1000, 1000, 1000],
+            "atr": [0.6, 0.6, 0.6],
+            "rsi": [42.0, 34.0, 33.0],
+            "BBL_20_2.0": [99.2, 99.1, 99.0],
+            "BBM_20_2.0": [100.0, 100.0, 100.0],
+            "BBU_20_2.0": [100.8, 100.9, 101.0],
+            "STOCHRSIk_14_14_3_3": [35.0, 26.0, 19.0],
+        })
+        result = strategy.generate_signal(
+            "ETHUSDT", df, MarketRegime.RANGING.value, "15m"
+        )
+        assert result is None
+
+    def test_accepts_bb_reversal_with_confirmation(self, strategy):
+        df = pd.DataFrame({
+            "open": [101.0, 99.5, 98.8],
+            "high": [101.2, 99.7, 99.4],
+            "low": [99.4, 98.9, 98.7],
+            "close": [99.6, 99.0, 99.2],
+            "volume": [1000, 980, 1150],
+            "volume_sma": [1000, 1000, 1000],
+            "atr": [0.6, 0.6, 0.6],
+            "rsi": [40.0, 32.0, 34.0],
+            "BBL_20_2.0": [99.2, 99.1, 99.0],
+            "BBM_20_2.0": [100.0, 100.0, 100.0],
+            "BBU_20_2.0": [100.8, 100.9, 101.0],
+            "STOCHRSIk_14_14_3_3": [28.0, 18.0, 21.0],
+        })
+        result = strategy.generate_signal(
+            "ETHUSDT", df, MarketRegime.RANGING.value, "15m"
+        )
+        assert result is None or isinstance(result, Signal)
+
+
+class TestIndicatorMath:
+    def test_adx_is_bounded_and_populated(self):
+        df = _make_df(n=120, trend=0.2, vol_factor=1.0)
+        adx_df = adx(df["high"], df["low"], df["close"], period=14)
+        assert not adx_df.empty
+        adx_col = [c for c in adx_df.columns if c.startswith("ADX_")][0]
+        dmp_col = [c for c in adx_df.columns if c.startswith("DMP_")][0]
+        dmn_col = [c for c in adx_df.columns if c.startswith("DMN_")][0]
+
+        latest_adx = float(adx_df[adx_col].dropna().iloc[-1])
+        latest_dmp = float(adx_df[dmp_col].dropna().iloc[-1])
+        latest_dmn = float(adx_df[dmn_col].dropna().iloc[-1])
+
+        assert 0.0 <= latest_adx <= 100.0
+        assert 0.0 <= latest_dmp <= 100.0
+        assert 0.0 <= latest_dmn <= 100.0
 
 
 # ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@ class BBReversionStrategy(BaseStrategy):
             return None
 
         latest = df.iloc[-1]
+        prev = df.iloc[-2]
         close = float(latest["close"])
         atr_val = float(latest.get("atr", 0))
         rsi_val = float(latest.get("rsi", 50))
@@ -59,6 +60,8 @@ class BBReversionStrategy(BaseStrategy):
         # Stochastic RSI
         stoch_k_col = [c for c in df.columns if c.startswith("STOCHRSIk_")]
         stoch_k_val = float(latest[stoch_k_col[0]]) if stoch_k_col else 50.0
+        stoch_k_prev = float(prev[stoch_k_col[0]]) if stoch_k_col else 50.0
+        rsi_prev = float(prev.get("rsi", 50))
 
         # Volume
         volume_now = float(latest.get("volume", 0))
@@ -66,34 +69,55 @@ class BBReversionStrategy(BaseStrategy):
         vol_ratio = volume_now / vol_sma if vol_sma > 0 else 0
 
         direction = None
-        stoch_bonus = 0.0
+        momentum_score = 0.0
+
+        # Confirmation helpers
+        is_bull_rejection = close > float(latest.get("open", close)) and float(prev.get("close", close)) < float(prev.get("open", close))
+        is_bear_rejection = close < float(latest.get("open", close)) and float(prev.get("close", close)) > float(prev.get("open", close))
+        rsi_turning_up = rsi_val >= rsi_prev
+        rsi_turning_down = rsi_val <= rsi_prev
+        stoch_turning_up = stoch_k_val >= stoch_k_prev
+        stoch_turning_down = stoch_k_val <= stoch_k_prev
 
         # --- Long Entry: price at/below lower BB, RSI oversold ---
-        if close <= bb_lower and rsi_val < 38:
-            direction = SignalDirection.LONG
-            stoch_bonus = 0.3 if stoch_k_val < 25 else 0.0
+        if close <= bb_lower and rsi_val < settings.rsi_oversold_long:
+            momentum_ok = is_bull_rejection or (rsi_turning_up and stoch_turning_up)
+            stoch_ok = stoch_k_val <= settings.stoch_rsi_oversold
+            volume_ok = vol_ratio >= 0.9
+            if momentum_ok and stoch_ok and volume_ok:
+                direction = SignalDirection.LONG
+                momentum_score = 1.0 if is_bull_rejection else 0.7
 
         # --- Short Entry: price at/above upper BB, RSI overbought ---
-        elif close >= bb_upper and rsi_val > 62:
-            direction = SignalDirection.SHORT
-            stoch_bonus = 0.3 if stoch_k_val > 75 else 0.0
+        elif close >= bb_upper and rsi_val > settings.rsi_overbought_short:
+            momentum_ok = is_bear_rejection or (rsi_turning_down and stoch_turning_down)
+            stoch_ok = stoch_k_val >= settings.stoch_rsi_overbought
+            volume_ok = vol_ratio >= 0.9
+            if momentum_ok and stoch_ok and volume_ok:
+                direction = SignalDirection.SHORT
+                momentum_score = 1.0 if is_bear_rejection else 0.7
 
         if direction is None:
             return None
 
         # --- Scoring ---
-        regime_align = 1.0 if regime == "RANGING" else 0.3
-        primary_score = 1.0  # BB touch confirmed
+        regime_align = 1.0 if regime == "RANGING" else 0.2
+
+        band_width = max(bb_upper - bb_lower, 1e-9)
+        if direction == SignalDirection.LONG:
+            penetration = max(0.0, (bb_lower - close) / band_width)
+        else:
+            penetration = max(0.0, (close - bb_upper) / band_width)
+        primary_score = min(0.6 + penetration * 2.0, 1.0)
 
         # RSI confirmation strength
         if direction == SignalDirection.LONG:
-            rsi_strength = max(0, (35 - rsi_val) / 35)
+            rsi_strength = max(0.0, (settings.rsi_oversold_long - rsi_val) / max(settings.rsi_oversold_long, 1))
         else:
-            rsi_strength = max(0, (rsi_val - 65) / 35)
-        confirm_score = min(rsi_strength + 0.3, 1.0)
+            rsi_strength = max(0.0, (rsi_val - settings.rsi_overbought_short) / max(100 - settings.rsi_overbought_short, 1))
+        confirm_score = min((0.55 * rsi_strength) + (0.45 * momentum_score), 1.0)
 
-        volume_sc = min(vol_ratio / 1.5, 1.0) if vol_ratio > 0.8 else 0.3
-        volume_sc = min(volume_sc + stoch_bonus, 1.0)
+        volume_sc = min(vol_ratio / 1.5, 1.0) if vol_ratio > 0.9 else 0.2
         htf_score = 0.5  # Neutral for mean-reversion
 
         confidence = compute_confidence(

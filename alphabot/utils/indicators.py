@@ -69,14 +69,19 @@ def adx(high: pd.Series, low: pd.Series, close: pd.Series,
         ],
         axis=1,
     ).max(axis=1)
-    atr_val = tr.rolling(period, min_periods=period).mean()
+    alpha = 1.0 / period
 
-    plus_di = 100.0 * (plus_dm.rolling(period, min_periods=period).sum() / atr_val.replace(0, np.nan))
-    minus_di = 100.0 * (minus_dm.rolling(period, min_periods=period).sum() / atr_val.replace(0, np.nan))
+    # Wilder-style smoothing for ADX family metrics.
+    atr_val = tr.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+    plus_dm_smooth = plus_dm.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+    minus_dm_smooth = minus_dm.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
+
+    plus_di = 100.0 * (plus_dm_smooth / atr_val.replace(0, np.nan))
+    minus_di = 100.0 * (minus_dm_smooth / atr_val.replace(0, np.nan))
 
     di_sum = (plus_di + minus_di).replace(0, np.nan)
     dx = ((plus_di - minus_di).abs() / di_sum) * 100.0
-    adx_val = dx.rolling(period, min_periods=period).mean()
+    adx_val = dx.ewm(alpha=alpha, adjust=False, min_periods=period).mean()
 
     return pd.DataFrame(
         {
