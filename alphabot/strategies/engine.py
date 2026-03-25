@@ -19,13 +19,14 @@ from alphabot.strategies.signal import Signal
 from alphabot.strategies.ema_crossover import EMACrossoverStrategy
 from alphabot.strategies.bb_reversion import BBReversionStrategy
 from alphabot.strategies.atr_breakout import ATRBreakoutStrategy
+from alphabot.strategies.pullback_momentum import PullbackMomentumStrategy
 from alphabot.utils.indicators import compute_all_indicators
 
 
 # Regime → Strategy mapping
 REGIME_STRATEGY_MAP: Dict[MarketRegime, List[type]] = {
-    MarketRegime.TRENDING_UP: [EMACrossoverStrategy, ATRBreakoutStrategy],
-    MarketRegime.TRENDING_DOWN: [EMACrossoverStrategy, ATRBreakoutStrategy],
+    MarketRegime.TRENDING_UP: [PullbackMomentumStrategy, EMACrossoverStrategy],
+    MarketRegime.TRENDING_DOWN: [PullbackMomentumStrategy, EMACrossoverStrategy],
     MarketRegime.RANGING: [BBReversionStrategy],
     MarketRegime.HIGH_VOLATILITY: [ATRBreakoutStrategy],
     MarketRegime.UNCLEAR: [],  # No trades in unclear regime
@@ -45,9 +46,15 @@ class StrategyEngine:
             "ema_crossover": EMACrossoverStrategy(),
             "bb_reversion": BBReversionStrategy(),
             "atr_breakout": ATRBreakoutStrategy(),
+            "pullback_momentum": PullbackMomentumStrategy(),
         }
 
-    def evaluate(self, symbol: str, timeframe: str | None = None) -> Optional[Signal]:
+    def evaluate(
+        self,
+        symbol: str,
+        timeframe: str | None = None,
+        bias_timeframe: str | None = None,
+    ) -> Optional[Signal]:
         """
         Evaluate current conditions for a symbol and generate a signal.
 
@@ -93,8 +100,8 @@ class StrategyEngine:
 
         # Higher timeframe for confirmation
         htf_df = None
-        htf = "1h" if tf != "1h" else "4h"
-        if self.data_store.has_enough_data(symbol, htf, min_candles=30):
+        htf = bias_timeframe or ("1h" if tf != "1h" else "4h")
+        if htf and self.data_store.has_enough_data(symbol, htf, min_candles=30):
             htf_df = self.data_store.get_dataframe(symbol, htf)
             htf_df = compute_all_indicators(htf_df, indicator_config)
 

@@ -93,9 +93,9 @@ class BinanceWebSocketClient:
 
     async def _fetch_all_historical(self) -> None:
         """Fetch historical data for all configured pairs and timeframes."""
-        timeframes = [settings.primary_timeframe]
-        # Also fetch 1h for higher-timeframe confirmation
-        if settings.primary_timeframe != "1h":
+        timeframes = list({settings.primary_timeframe, *getattr(settings, "entry_timeframes", []), *getattr(settings, "bias_timeframes", [])})
+        # Fallback: ensure 1h is available for confirmation
+        if "1h" not in timeframes and settings.primary_timeframe != "1h":
             timeframes.append("1h")
 
         for symbol in settings.trading_pairs:
@@ -114,9 +114,13 @@ class BinanceWebSocketClient:
     def _build_stream_url(self) -> str:
         """Build combined WebSocket stream URL for all pairs."""
         streams = []
+        bias_tfs = list(getattr(settings, "bias_timeframes", []) or [])
         for symbol in settings.trading_pairs:
             sym = symbol.lower()
             streams.append(f"{sym}@kline_{settings.primary_timeframe}")
+            for tf in bias_tfs:
+                if tf and tf != settings.primary_timeframe:
+                    streams.append(f"{sym}@kline_{tf}")
             streams.append(f"{sym}@markPrice@1s")
         stream_path = "/".join(streams)
         return f"wss://fstream.binance.com/stream?streams={stream_path}"

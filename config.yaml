@@ -10,6 +10,14 @@ regime_detection:
   adx_ranging_threshold: 21
   atr_volatility_multiplier: 2.0   # ATR spike > 2x 20-period avg = high vol
 
+# --- Multi-Timeframe Stack ---
+multi_timeframe:
+  entry_timeframes:
+    - "15m"        # Primary entry timeframe
+  bias_timeframes:
+    - "1h"         # Trend filter
+    - "4h"         # Macro context (optional)
+
 strategies:
   ema_crossover:
     ema_fast: 20
@@ -27,6 +35,21 @@ strategies:
     rsi_overbought: 65
     stoch_rsi_oversold: 20
     stoch_rsi_overbought: 80
+
+  pullback_momentum:
+    ema_pullback_tolerance_pct: 0.8
+    rsi_oversold: 42
+    rsi_overbought: 58
+    rsi_confirmation_long: 48
+    rsi_confirmation_short: 52
+    volume_multiplier: 1.5
+    adx_min_htf: 20
+    atr_sl_multiplier: 1.5
+    atr_tp1_multiplier: 2.5
+    atr_tp2_multiplier: 4.0
+    min_body_pct: 0.35
+    max_upper_wick_long: 0.40
+    max_lower_wick_short: 0.40
 
   atr_breakout:
     atr_period: 14

@@ -56,6 +56,18 @@ def _as_decimal(value, fallback: str) -> Decimal:
         return Decimal(fallback)
 
 
+def _as_str_list(value, fallback: List[str]) -> List[str]:
+    if value is None:
+        return fallback
+    if isinstance(value, list):
+        return [str(v) for v in value if v is not None and str(v).strip()]
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",")]
+        items = [p for p in parts if p]
+        return items or fallback
+    return fallback
+
+
 class Settings(BaseSettings):
     """Master settings — merges .env + config.yaml with validation."""
 
@@ -76,6 +88,14 @@ class Settings(BaseSettings):
     trading_pairs: List[str] = Field(default=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
     primary_timeframe: str = Field(default="15m")
     candle_lookback: int = Field(default=200, ge=50, le=1000)
+
+    # ---- Multi-timeframe ----
+    entry_timeframes: List[str] = Field(
+        default=_as_str_list(_yaml_get("multi_timeframe", "entry_timeframes", default=None), ["15m"])
+    )
+    bias_timeframes: List[str] = Field(
+        default=_as_str_list(_yaml_get("multi_timeframe", "bias_timeframes", default=None), ["1h", "4h"])
+    )
 
     # ---- Risk Parameters ----
     risk_per_trade_pct: Decimal = Field(
@@ -158,6 +178,68 @@ class Settings(BaseSettings):
         default=_as_int(_yaml_get("strategies", "bb_reversion", "stoch_rsi_overbought", default=80), 80),
         ge=60,
         le=95,
+    )
+
+    # ---- PMC (Pullback Momentum Confluence) ----
+    pmc_volume_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "volume_multiplier", default="1.5"), "1.5"),
+        ge=Decimal("1.0"),
+        le=Decimal("5.0"),
+    )
+    pmc_adx_min_htf: int = Field(
+        default=_as_int(_yaml_get("strategies", "pullback_momentum", "adx_min_htf", default=20), 20),
+        ge=10,
+        le=40,
+    )
+    pmc_rsi_oversold: int = Field(
+        default=_as_int(_yaml_get("strategies", "pullback_momentum", "rsi_oversold", default=42), 42),
+        ge=20,
+        le=60,
+    )
+    pmc_rsi_overbought: int = Field(
+        default=_as_int(_yaml_get("strategies", "pullback_momentum", "rsi_overbought", default=58), 58),
+        ge=40,
+        le=90,
+    )
+    pmc_rsi_confirmation_long: int = Field(
+        default=_as_int(_yaml_get("strategies", "pullback_momentum", "rsi_confirmation_long", default=48), 48),
+        ge=30,
+        le=70,
+    )
+    pmc_rsi_confirmation_short: int = Field(
+        default=_as_int(_yaml_get("strategies", "pullback_momentum", "rsi_confirmation_short", default=52), 52),
+        ge=30,
+        le=70,
+    )
+    pmc_atr_sl_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "atr_sl_multiplier", default="1.5"), "1.5"),
+        ge=Decimal("0.8"),
+        le=Decimal("3.0"),
+    )
+    pmc_atr_tp1_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "atr_tp1_multiplier", default="2.5"), "2.5"),
+        ge=Decimal("1.0"),
+        le=Decimal("6.0"),
+    )
+    pmc_atr_tp2_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "atr_tp2_multiplier", default="4.0"), "4.0"),
+        ge=Decimal("1.5"),
+        le=Decimal("10.0"),
+    )
+    pmc_min_body_pct: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "min_body_pct", default="0.35"), "0.35"),
+        ge=Decimal("0.1"),
+        le=Decimal("0.9"),
+    )
+    pmc_max_upper_wick_long: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "max_upper_wick_long", default="0.40"), "0.40"),
+        ge=Decimal("0.05"),
+        le=Decimal("0.95"),
+    )
+    pmc_max_lower_wick_short: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "max_lower_wick_short", default="0.40"), "0.40"),
+        ge=Decimal("0.05"),
+        le=Decimal("0.95"),
     )
 
     # ---- Dashboard ----

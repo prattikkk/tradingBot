@@ -52,6 +52,14 @@ async def main() -> None:
     from alphabot.strategies.engine import StrategyEngine
     strategy_engine = StrategyEngine(data_store, regime_detector)
 
+    # ---- 5b. Timeframe Manager (multi-timeframe routing) ----
+    from alphabot.data.timeframe_manager import TimeframeManager
+    tf_manager = TimeframeManager(data_store)
+    tf_manager.configure_default_stack(
+        entry_timeframes=list(settings.entry_timeframes) or [settings.primary_timeframe],
+        bias_timeframes=list(settings.bias_timeframes) or ["1h", "4h"],
+    )
+
     # ---- 6. Risk Manager ----
     from alphabot.risk.risk_manager import RiskManager
     risk_manager = RiskManager(db)
@@ -155,33 +163,24 @@ async def main() -> None:
     dashboard_server = DashboardServer(get_dashboard_state)
     await dashboard_server.start(settings.dashboard_host, settings.dashboard_port)
 
-    # ---- 13. Candle Close Callback ----
+    # ---- 13. Candle Close Callback (routes to TFManager) ----
     async def on_candle_close(candle) -> None:
-        """Called on every candle close — runs the trading loop."""
+        await tf_manager.on_candle_close(candle)
+
+    async def on_entry_signal_ready(symbol: str, timeframe: str) -> None:
+        """Called only when an ENTRY timeframe candle closes and bias data is ready."""
         nonlocal balance
 
-        symbol = candle.symbol
-        logger.info(f"--- Candle closed: {symbol} {candle.timeframe} C={candle.close} ---")
+        logger.info(f"--- Entry eval: {symbol} {timeframe} ---")
 
-        # Skip if halted
-        if risk_manager.is_halted:
-            logger.warning(f"Bot halted — skipping signal evaluation for {symbol}")
+        if risk_manager.is_halted or risk_manager.is_daily_halted:
             return
 
-        if risk_manager.is_daily_halted:
-            logger.warning(f"Daily cap hit — skipping signal evaluation for {symbol}")
-            return
-
-        # Only process primary timeframe candles
-        if candle.timeframe != settings.primary_timeframe:
-            return
-
-        # Generate signal
-        signal = strategy_engine.evaluate(symbol)
+        bias_tf = tf_manager.get_bias_timeframe(timeframe)
+        signal = strategy_engine.evaluate(symbol, timeframe, bias_timeframe=bias_tf)
         if signal is None:
             return
 
-        # Validate with Risk Manager
         open_pos_dicts = [p.to_dict() for p in position_manager.open_positions]
         total_exp = position_manager.total_exposure
 
@@ -196,12 +195,12 @@ async def main() -> None:
             logger.info(f"Signal rejected for {symbol}: {reason}")
             return
 
-        # Open position
         pos = await position_manager.open_position(signal, size_info)
         if pos:
             logger.info(f"Position opened: {pos.id} {pos.symbol} {pos.direction}")
-            # Update risk manager's open-time cooldown
             risk_manager.record_trade_opened(pos.symbol)
+
+    tf_manager.register_callback(on_entry_signal_ready)
 
     # ---- 14. WebSocket Data Feed ----
     from alphabot.data.websocket_client import BinanceWebSocketClient
