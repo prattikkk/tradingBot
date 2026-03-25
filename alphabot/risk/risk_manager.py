@@ -50,7 +50,8 @@ class RiskManager:
         self._drawdown_halt: bool = False
         self._consecutive_losses: int = 0
         self._cooldown_until: Optional[datetime.datetime] = None
-        self._last_trade_time: Dict[str, datetime.datetime] = {}
+        self._last_trade_time: Dict[str, datetime.datetime] = {}  # When trade CLOSED
+        self._last_trade_open_time: Dict[str, datetime.datetime] = {}  # When position OPENED
         self._halted: bool = False
 
     def initialize(
@@ -188,15 +189,15 @@ class RiskManager:
             self._log_rejection(signal, reason)
             return False, reason, {}
 
-        # ---- Min candle gap between trades ----
-        last_trade = self._last_trade_time.get(signal.symbol)
-        if last_trade:
-            # Rough estimate: 1 candle gap
-            elapsed = (datetime.datetime.now(datetime.UTC) - last_trade).total_seconds()
+        # ---- Min candle gap between trades (check from last OPEN, not close) ----
+        last_open = self._last_trade_open_time.get(signal.symbol)
+        if last_open:
+            # Time gap between NOW and the time the LAST position was OPENED
+            elapsed = (datetime.datetime.now(datetime.UTC) - last_open).total_seconds()
             tf_seconds = self._timeframe_to_seconds(signal.timeframe)
             min_gap = tf_seconds * settings.min_candles_between_trades
             if elapsed < min_gap:
-                reason = f"COOLDOWN — {elapsed:.0f}s since last trade, need {min_gap}s"
+                reason = f"COOLDOWN — {elapsed:.0f}s since last position opened, need {min_gap}s"
                 self._log_rejection(signal, reason)
                 return False, reason, {}
 
@@ -210,6 +211,14 @@ class RiskManager:
         self._log_signal(signal, approved=True)
 
         return True, "APPROVED", size_info
+
+    def record_trade_opened(
+        self,
+        symbol: str,
+    ) -> None:
+        """Called when a position is OPENED — updates open-time cooldown."""
+        self._last_trade_open_time[symbol] = datetime.datetime.now(datetime.UTC)
+        logger.debug(f"[Risk] Position opened for {symbol} — cooldown reset")
 
     def record_trade_result(
         self,

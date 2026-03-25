@@ -200,6 +200,8 @@ async def main() -> None:
         pos = await position_manager.open_position(signal, size_info)
         if pos:
             logger.info(f"Position opened: {pos.id} {pos.symbol} {pos.direction}")
+            # Update risk manager's open-time cooldown
+            risk_manager.record_trade_opened(pos.symbol)
 
     # ---- 14. WebSocket Data Feed ----
     from alphabot.data.websocket_client import BinanceWebSocketClient
@@ -253,6 +255,7 @@ async def main() -> None:
                     for pos in position_manager.open_positions:
                         if pos.symbol == symbol:
                             protected.extend(getattr(pos, "tp_order_ids", []))
+                            protected.extend(getattr(pos, "sl_order_ids", []))
 
                     await order_executor.cleanup_stale_orders(
                         symbol,

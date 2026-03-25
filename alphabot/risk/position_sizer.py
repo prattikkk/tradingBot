@@ -109,11 +109,12 @@ class PositionSizer:
             position_size_usdt = margin_required * Decimal(str(lev))
             logger.info(f"[Sizer] Position reduced to fit exposure limit: {position_size_usdt}")
 
-        # Check per-trade exposure (max 2% of balance)
+        # Check per-trade exposure (max 2% of balance) — AFTER exposure cap reduction
         max_trade_exposure = account_balance * settings.max_risk_per_trade_pct / Decimal("100")
         if margin_required > max_trade_exposure:
             margin_required = max_trade_exposure
             position_size_usdt = margin_required * Decimal(str(lev))
+            logger.info(f"[Sizer] Position capped to per-trade max: {position_size_usdt}")
 
         # Calculate quantity in base asset
         quantity = (position_size_usdt / entry_price).quantize(

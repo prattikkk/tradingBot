@@ -322,14 +322,14 @@ class PositionManager:
             except Exception as e:
                 logger.error(f"[PosManager] Error closing position {position_id}: {e}")
 
-        # Record in PnL tracker
+        # Record in PnL tracker (use remaining_qty to account for partial closes)
         self.pnl_tracker.record_trade(
             trade_id=pos.id,
             symbol=pos.symbol,
             direction=pos.direction,
             entry_price=float(pos.entry_price),
             exit_price=float(price),
-            quantity=float(pos.quantity),
+            quantity=float(pos.remaining_qty),
             leverage=pos.leverage,
             fees=fees,
             strategy_name=pos.strategy_name,
@@ -543,15 +543,25 @@ class PositionManager:
         )
 
     def _get_atr(self, symbol: str) -> float:
-        """Get latest ATR value for a symbol."""
+        """Get latest ATR value for a symbol from cache.
+        Cache is updated only on candle close, not on every monitor loop tick.
+        """
+        # Return cached value if available
+        if symbol in self._atr_cache:
+            return self._atr_cache[symbol]
+        
+        # Fallback: compute once and cache
         df = self.data_store.get_dataframe(symbol, settings.primary_timeframe)
-        if df.empty:
+        if df.empty or 'atr' not in df.columns:
             return 0.0
-        from alphabot.utils.indicators import atr
-        atr_series = atr(df["high"], df["low"], df["close"], settings.atr_period)
-        if atr_series is None or atr_series.empty:
-            return 0.0
-        return float(atr_series.iloc[-1])
+        
+        atr_val = float(df['atr'].iloc[-1]) if not df['atr'].isna().all() else 0.0
+        self._atr_cache[symbol] = atr_val
+        return atr_val
+    
+    def update_atr_cache(self, symbol: str, atr_val: float) -> None:
+        """Update ATR cache when new candle closes. Call this from strategy engine."""
+        self._atr_cache[symbol] = atr_val
 
     def _persist_position(self, pos: Position) -> None:
         """Save position to database."""

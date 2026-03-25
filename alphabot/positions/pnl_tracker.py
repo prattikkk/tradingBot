@@ -172,7 +172,7 @@ class PnLTracker:
 
     @property
     def sharpe_ratio(self) -> float:
-        """Simplified Sharpe ratio (annualized, assuming ~96 trades/day on 15m)."""
+        """Simplified Sharpe ratio (annualized for 252 trading days/year on 15m)."""
         import numpy as np
         if len(self._returns) < 2:
             return 0.0
@@ -181,9 +181,10 @@ class PnLTracker:
         std_ret = np.std(arr, ddof=1)
         if std_ret == 0:
             return 0.0
-        # Annualize: ~365 days * ~96 candles/day for 15m
-        daily_trades = max(len(self._returns), 1)
-        return float(mean_ret / std_ret * (daily_trades ** 0.5))
+        # Annualize: ~252 trading days/year, ~96 trades/day for 15m = ~24192 trades/year
+        # Annualization_factor = sqrt(252 * 96) ≈ sqrt(24192) ≈ 155.6
+        annualization_factor = (252 * 96) ** 0.5  # Approx 155.6
+        return float(mean_ret / std_ret * annualization_factor)
 
     def get_stats(self) -> dict:
         """Return performance statistics for dashboard."""

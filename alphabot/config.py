@@ -107,7 +107,7 @@ class Settings(BaseSettings):
         le=20,
     )
     min_signal_confidence: int = Field(
-        default=_as_int(_yaml_get("signal_scoring", "min_confidence", default=60), 60),
+        default=_as_int(_yaml_get("signal_scoring", "min_confidence", default=68), 68),
         ge=50,
         le=90,
     )
@@ -141,7 +141,7 @@ class Settings(BaseSettings):
     )
 
     # ---- Dashboard ----
-    dashboard_host: str = Field(default="127.0.0.1")
+    dashboard_host: str = Field(default="0.0.0.0")
     dashboard_port: int = Field(default=8080, ge=1024, le=65535)
 
     # ---- Logging ----
@@ -206,7 +206,21 @@ class Settings(BaseSettings):
     @classmethod
     def parse_trading_pairs(cls, v):
         if isinstance(v, str):
-            return [p.strip() for p in v.split(",") if p.strip()]
+            import json
+            # First try direct JSON parsing (for JSON array format)
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return [str(p).strip() for p in parsed if p]
+            except (json.JSONDecodeError, ValueError):
+                pass
+            
+            # Fall back to comma-separated format
+            # Remove brackets and quotes if JSON array format was attempted
+            v = v.strip().lstrip('[').rstrip(']')
+            # Split on commas and clean each pair
+            pairs = [p.strip().strip('"') for p in v.split(",") if p.strip()]
+            return [p for p in pairs if p]  # Filter out empty strings
         return v
 
     @property
