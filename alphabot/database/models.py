@@ -53,6 +53,8 @@ class PositionRecord(Base):
     close_timestamp = Column(DateTime, nullable=True)
     exit_reason = Column(String(30), nullable=True)
     order_ids = Column(Text, nullable=True)  # JSON list of exchange order IDs
+    tp_order_ids = Column(Text, nullable=True)  # JSON list of TP order IDs
+    sl_order_ids = Column(Text, nullable=True)  # JSON list of SL order IDs
 
 
 class TradeRecord(Base):
@@ -97,3 +99,12 @@ class SignalLog(Base):
     tp_price = Column(Float, nullable=True)
     approved = Column(Integer, nullable=False, default=0)  # 0 = rejected, 1 = approved
     rejection_reason = Column(String(200), nullable=True)
+
+
+class BotState(Base):
+    """Simple key-value state store for persistent bot runtime state."""
+    __tablename__ = "bot_state"
+
+    key = Column(String(50), primary_key=True)
+    value = Column(String(200), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.UTC))

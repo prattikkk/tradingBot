@@ -104,7 +104,7 @@ class ATRBreakoutStrategy(BaseStrategy):
             return None
 
         # --- SL / TP ---
-        sl_mult = 2.0  # Wider for volatility
+        sl_mult = 2.5  # Wider for volatility
         trailing_mult = 2.0
 
         if direction == SignalDirection.LONG:

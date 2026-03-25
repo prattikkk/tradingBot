@@ -53,15 +53,37 @@ class RiskManager:
         self._last_trade_time: Dict[str, datetime.datetime] = {}
         self._halted: bool = False
 
-    def initialize(self, account_balance: Decimal) -> None:
-        """Set initial balance and peak. Called on bot startup."""
+    def initialize(
+        self,
+        account_balance: Decimal,
+        db: Optional[Database] = None,
+        reset_runtime: bool = True,
+    ) -> None:
+        """Set balance/peak and restore persisted peak when available."""
         self._session_start_balance = account_balance
-        self._peak_balance = account_balance
-        self._daily_pnl = Decimal("0")
-        self._daily_loss_halt = False
-        self._drawdown_halt = False
+        state_db = db or self.db
+        if state_db:
+            saved_peak = state_db.get_state("peak_balance")
+            if saved_peak:
+                try:
+                    saved_peak_dec = Decimal(saved_peak)
+                    self._peak_balance = max(saved_peak_dec, account_balance)
+                except Exception:
+                    self._peak_balance = account_balance
+            else:
+                self._peak_balance = account_balance
+        else:
+            self._peak_balance = account_balance
+
+        if state_db:
+            state_db.save_state("peak_balance", str(self._peak_balance))
+
+        if reset_runtime:
+            self._daily_pnl = Decimal("0")
+            self._daily_loss_halt = False
+            self._drawdown_halt = False
         logger.info(
-            f"[Risk] Initialized: balance={account_balance} peak={account_balance}"
+            f"[Risk] Initialized: balance={account_balance} peak={self._peak_balance}"
         )
 
     @property
@@ -188,7 +210,13 @@ class RiskManager:
 
         return True, "APPROVED", size_info
 
-    def record_trade_result(self, symbol: str, pnl: Decimal, is_win: bool) -> None:
+    def record_trade_result(
+        self,
+        symbol: str,
+        pnl: Decimal,
+        is_win: bool,
+        db: Optional[Database] = None,
+    ) -> None:
         """Called after each trade closes to update risk state."""
         self._daily_pnl += pnl
         self._last_trade_time[symbol] = datetime.datetime.now(datetime.UTC)
@@ -216,6 +244,10 @@ class RiskManager:
             logger.warning(
                 f"[Risk] DAILY LOSS CAP HIT — loss:{self._daily_pnl} ({daily_loss_pct:.2f}%)"
             )
+
+        state_db = db or self.db
+        if state_db:
+            state_db.save_state("peak_balance", str(self._peak_balance))
 
     def reset_daily(self) -> None:
         """Reset daily counters — called at UTC midnight."""

@@ -73,8 +73,15 @@ class PositionSizer:
         # Apply leverage: actual margin used
         margin_required = position_size_usdt / Decimal(str(lev))
 
-        # Check total exposure limit (max 6% per AlphaBot PRD)
-        max_total_exposure = account_balance * Decimal("6") / Decimal("100")
+        # Scale total exposure limit by account size tier.
+        if account_balance < Decimal("5000"):
+            exposure_pct = Decimal("15")
+        elif account_balance < Decimal("20000"):
+            exposure_pct = Decimal("10")
+        else:
+            exposure_pct = Decimal("6")
+
+        max_total_exposure = account_balance * exposure_pct / Decimal("100")
         if existing_exposure + margin_required > max_total_exposure:
             available = max_total_exposure - existing_exposure
             if available <= 0:

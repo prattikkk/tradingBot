@@ -6,8 +6,8 @@ regime_detection:
   atr_period: 14
   bb_period: 20
   bb_std: 2
-  adx_trending_threshold: 25
-  adx_ranging_threshold: 20
+  adx_trending_threshold: 23
+  adx_ranging_threshold: 21
   atr_volatility_multiplier: 2.0   # ATR spike > 2x 20-period avg = high vol
 
 strategies:
@@ -16,8 +16,8 @@ strategies:
     ema_slow: 50
     adx_min: 25
     volume_multiplier: 1.2
-    atr_sl_multiplier: 1.5
-    atr_tp_multiplier: 3.0
+    atr_sl_multiplier: 2.0
+    atr_tp_multiplier: 4.0
 
   bb_reversion:
     bb_period: 20
@@ -31,7 +31,7 @@ strategies:
   atr_breakout:
     atr_period: 14
     volume_multiplier: 2.0
-    atr_sl_multiplier: 2.0
+    atr_sl_multiplier: 2.5
     trailing_atr_multiplier: 2.0
 
 signal_scoring:
@@ -40,10 +40,10 @@ signal_scoring:
   confirmation_weight: 20
   volume_weight: 15
   higher_tf_weight: 10
-  min_confidence: 60
+  min_confidence: 68
 
 risk:
-  risk_per_trade_pct: 1.0
+  risk_per_trade_pct: 0.5
   max_risk_per_trade_pct: 2.0
   daily_loss_cap_pct: 2.0
   max_drawdown_pct: 5.0

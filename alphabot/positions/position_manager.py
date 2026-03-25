@@ -18,7 +18,7 @@ import asyncio
 import datetime
 import uuid
 from decimal import Decimal
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Optional
 
 from loguru import logger
 
@@ -79,6 +79,8 @@ class Position:
         self.closed_at: Optional[datetime.datetime] = None
         self.close_reason: Optional[str] = None
         self.order_ids: List[str] = []
+        self.tp_order_ids: List[str] = []
+        self.sl_order_ids: List[str] = []
         # Track highest/lowest price since entry for trailing stop
         self._peak_price = entry_price
         self._trough_price = entry_price
@@ -142,6 +144,7 @@ class PositionManager:
         pnl_tracker: PnLTracker,
         order_executor=None,  # Injected later to avoid circular imports
         notifier=None,        # Telegram notifier
+        on_position_closed: Optional[Callable[[], Coroutine[Any, Any, None]]] = None,
     ):
         self.data_store = data_store
         self.db = database
@@ -149,6 +152,7 @@ class PositionManager:
         self.pnl_tracker = pnl_tracker
         self.order_executor = order_executor
         self.notifier = notifier
+        self.on_position_closed = on_position_closed
         self._positions: Dict[str, Position] = {}
         self._monitor_task: Optional[asyncio.Task] = None
         self._running = False
@@ -239,7 +243,10 @@ class PositionManager:
                     stop_price=float(signal.stop_loss),
                 )
                 if sl_order:
-                    pos.order_ids.append(str(sl_order.get("orderId", "")))
+                    sl_id = str(sl_order.get("orderId", "") or sl_order.get("id", ""))
+                    if sl_id:
+                        pos.sl_order_ids = [sl_id]
+                        pos.order_ids.append(sl_id)
 
                 # TP1 limit order
                 tp_side = "SELL" if signal.direction == SignalDirection.LONG else "BUY"
@@ -251,7 +258,10 @@ class PositionManager:
                     price=float(signal.take_profit_1),
                 )
                 if tp1_order:
-                    pos.order_ids.append(str(tp1_order.get("orderId", "")))
+                    tp_id = str(tp1_order.get("orderId", "") or tp1_order.get("id", ""))
+                    if tp_id:
+                        pos.tp_order_ids = [tp_id]
+                        pos.order_ids.append(tp_id)
 
             except Exception as e:
                 logger.error(f"[PosManager] Failed to place orders for {signal.symbol}: {e}")
@@ -332,7 +342,7 @@ class PositionManager:
 
         # Update risk manager
         self.risk_manager.record_trade_result(
-            pos.symbol, net_pnl, is_win=(net_pnl > 0)
+            pos.symbol, net_pnl, is_win=(net_pnl > 0), db=self.db
         )
 
         # Persist
@@ -341,6 +351,9 @@ class PositionManager:
         # Notify
         if self.notifier:
             asyncio.create_task(self.notifier.notify_trade_closed(pos, float(net_pnl)))
+
+        if self.on_position_closed:
+            asyncio.create_task(self.on_position_closed())
 
         logger.info(
             f"[PosManager] Position closed: {position_id} {pos.symbol} "
@@ -568,33 +581,47 @@ class PositionManager:
             close_timestamp=pos.closed_at,
             exit_reason=pos.close_reason,
             order_ids=json.dumps(pos.order_ids),
+            tp_order_ids=json.dumps(pos.tp_order_ids),
+            sl_order_ids=json.dumps(pos.sl_order_ids),
         )
         self.db.save_position(rec)
 
     async def _recover_positions(self) -> None:
         """Recover open positions from DB on restart."""
+        import json
         open_recs = self.db.get_open_positions()
         for rec in open_recs:
+            tp1 = getattr(rec, "tp1_price", None)
+            tp2 = getattr(rec, "tp2_price", None)
+            leverage_raw = getattr(rec, "leverage", settings.max_leverage)
+            signal_conf_raw = getattr(rec, "signal_confidence", 0.0)
             pos = Position(
-                position_id=rec.id,
-                symbol=rec.symbol,
-                direction=rec.direction,
+                position_id=str(rec.id),
+                symbol=str(rec.symbol),
+                direction=str(rec.direction),
                 quantity=Decimal(str(rec.quantity)),
                 entry_price=Decimal(str(rec.entry_price)),
-                leverage=rec.leverage,
+                leverage=int(leverage_raw),
                 sl_price=Decimal(str(rec.sl_price)),
-                tp1_price=Decimal(str(rec.tp1_price)) if rec.tp1_price else Decimal("0"),
-                tp2_price=Decimal(str(rec.tp2_price)) if rec.tp2_price else None,
-                strategy_name=rec.strategy_name,
-                regime=rec.regime_at_entry,
-                signal_confidence=rec.signal_confidence or 0.0,
+                tp1_price=Decimal(str(tp1)) if tp1 is not None else Decimal("0"),
+                tp2_price=Decimal(str(tp2)) if tp2 is not None else None,
+                strategy_name=str(rec.strategy_name),
+                regime=str(rec.regime_at_entry),
+                signal_confidence=float(signal_conf_raw or 0.0),
                 size_usdt=Decimal(str(rec.size_usdt)),
             )
-            pos.status = rec.status
+            pos.status = str(rec.status)
             pos.trailing_stop_active = bool(rec.trailing_stop_active)
-            if rec.trailing_stop_price:
+            if rec.trailing_stop_price is not None:
                 pos.trailing_stop_price = Decimal(str(rec.trailing_stop_price))
-            self._positions[rec.id] = pos
+            order_ids_raw = getattr(rec, "order_ids", None)
+            if order_ids_raw is not None and str(order_ids_raw).strip():
+                pos.order_ids = json.loads(str(order_ids_raw))
+            if getattr(rec, "tp_order_ids", None):
+                pos.tp_order_ids = json.loads(str(rec.tp_order_ids))
+            if getattr(rec, "sl_order_ids", None):
+                pos.sl_order_ids = json.loads(str(rec.sl_order_ids))
+            self._positions[str(rec.id)] = pos
             logger.info(f"[PosManager] Recovered position: {rec.id} {rec.symbol} {rec.direction}")
 
         if open_recs:

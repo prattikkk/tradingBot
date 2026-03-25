@@ -73,7 +73,16 @@ async def main() -> None:
         logger.warning(f"Could not fetch balance (using default): {e}")
         balance = 10000.0  # Testnet default
 
-    risk_manager.initialize(Decimal(str(balance)))
+    risk_manager.initialize(Decimal(str(balance)), db=db)
+
+    async def refresh_balance() -> None:
+        nonlocal balance
+        try:
+            balance = await client.get_usdt_balance()
+            risk_manager.initialize(Decimal(str(balance)), db=db, reset_runtime=False)
+            logger.info(f"Balance refreshed: ${balance:,.2f}")
+        except Exception as e:
+            logger.error(f"Balance refresh failed: {e}")
 
     # ---- 9. Order Executor ----
     from alphabot.execution.order_executor import OrderExecutor
@@ -87,6 +96,7 @@ async def main() -> None:
         risk_manager=risk_manager,
         pnl_tracker=pnl_tracker,
         order_executor=order_executor,
+        on_position_closed=refresh_balance,
     )
 
     # ---- 11. Telegram Notifier ----
@@ -239,8 +249,15 @@ async def main() -> None:
             await asyncio.sleep(300)
             for symbol in settings.trading_pairs:
                 try:
+                    protected: list[str] = []
+                    for pos in position_manager.open_positions:
+                        if pos.symbol == symbol:
+                            protected.extend(getattr(pos, "tp_order_ids", []))
+
                     await order_executor.cleanup_stale_orders(
-                        symbol, settings.stale_order_minutes
+                        symbol,
+                        settings.stale_order_minutes,
+                        protected_ids=protected,
                     )
                 except Exception as e:
                     logger.error(f"Stale order cleanup error for {symbol}: {e}")
@@ -273,6 +290,29 @@ async def main() -> None:
 
     # ---- 21. Graceful Shutdown ----
     logger.info("Shutting down gracefully...")
+
+    async def log_session_summary() -> None:
+        stats = pnl_tracker.get_stats()
+        risk = risk_manager.get_status()
+        uptime = str(datetime.datetime.now(datetime.UTC) - start_time).split(".")[0]
+        logger.info("=" * 50)
+        logger.info(f"SESSION SUMMARY — uptime: {uptime}")
+        logger.info(
+            f"Trades: {stats.get('total_trades', 0)} | "
+            f"W:{stats.get('wins', 0)} L:{stats.get('losses', 0)} | "
+            f"WR:{stats.get('win_rate', 0):.1f}%"
+        )
+        logger.info(
+            f"PnL: ${stats.get('total_pnl', 0):.2f} | "
+            f"PF:{stats.get('profit_factor', 0):.2f}"
+        )
+        logger.info(
+            f"Daily PnL: ${risk.get('daily_pnl', 0):.2f} | "
+            f"Consecutive losses: {risk.get('consecutive_losses', 0)}"
+        )
+        logger.info("=" * 50)
+
+    await log_session_summary()
 
     # Close all positions
     if position_manager.open_positions:

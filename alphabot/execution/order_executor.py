@@ -146,20 +146,30 @@ class OrderExecutor:
             logger.error(f"[Executor] Fetch open orders failed: {symbol} — {e}")
             raise
 
-    async def cleanup_stale_orders(self, symbol: str, max_age_minutes: int = 30) -> None:
-        """Cancel orders older than max_age_minutes."""
+    async def cleanup_stale_orders(
+        self,
+        symbol: str,
+        max_age_minutes: int = 30,
+        protected_ids: Optional[list[str]] = None,
+    ) -> None:
+        """Cancel non-protected orders older than max_age_minutes."""
         try:
             import datetime
             orders = await self.get_open_orders(symbol)
             now = datetime.datetime.now(datetime.UTC).timestamp() * 1000  # ms
+            protected = set(protected_ids or [])
 
             for order in orders:
+                order_id = str(order.get("id", ""))
+                if order_id in protected:
+                    continue
+
                 created = order.get("timestamp", now)
                 age_minutes = (now - created) / 60000
                 if age_minutes > max_age_minutes:
-                    await self.cancel_order(symbol, order["id"])
+                    await self.cancel_order(symbol, order_id)
                     logger.info(
-                        f"[Executor] Stale order cancelled: {symbol} {order['id']} "
+                        f"[Executor] Stale order cancelled: {symbol} {order_id} "
                         f"(age: {age_minutes:.0f} min)"
                     )
         except Exception as e:

@@ -66,14 +66,17 @@ class BBReversionStrategy(BaseStrategy):
         vol_ratio = volume_now / vol_sma if vol_sma > 0 else 0
 
         direction = None
+        stoch_bonus = 0.0
 
         # --- Long Entry: price at/below lower BB, RSI oversold ---
-        if close <= bb_lower and rsi_val < 35 and stoch_k_val < 20:
+        if close <= bb_lower and rsi_val < 38:
             direction = SignalDirection.LONG
+            stoch_bonus = 0.3 if stoch_k_val < 25 else 0.0
 
         # --- Short Entry: price at/above upper BB, RSI overbought ---
-        elif close >= bb_upper and rsi_val > 65 and stoch_k_val > 80:
+        elif close >= bb_upper and rsi_val > 62:
             direction = SignalDirection.SHORT
+            stoch_bonus = 0.3 if stoch_k_val > 75 else 0.0
 
         if direction is None:
             return None
@@ -90,6 +93,7 @@ class BBReversionStrategy(BaseStrategy):
         confirm_score = min(rsi_strength + 0.3, 1.0)
 
         volume_sc = min(vol_ratio / 1.5, 1.0) if vol_ratio > 0.8 else 0.3
+        volume_sc = min(volume_sc + stoch_bonus, 1.0)
         htf_score = 0.5  # Neutral for mean-reversion
 
         confidence = compute_confidence(

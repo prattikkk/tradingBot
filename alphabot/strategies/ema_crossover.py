@@ -12,7 +12,7 @@ TP:          3 × ATR from entry (minimum 2:1 R:R)
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, cast
 
 import pandas as pd
 from loguru import logger
@@ -47,6 +47,14 @@ class EMACrossoverStrategy(BaseStrategy):
 
         if any(pd.isna(v) for v in [ema_fast_now, ema_slow_now, ema_fast_prev, ema_slow_prev]):
             return None
+
+        if any(v is None for v in [ema_fast_now, ema_slow_now, ema_fast_prev, ema_slow_prev]):
+            return None
+
+        ema_fast_now = float(cast(float, ema_fast_now))
+        ema_slow_now = float(cast(float, ema_slow_now))
+        ema_fast_prev = float(cast(float, ema_fast_prev))
+        ema_slow_prev = float(cast(float, ema_slow_prev))
 
         # ADX
         adx_col = [c for c in df.columns if c.startswith("ADX_")]
@@ -91,9 +99,6 @@ class EMACrossoverStrategy(BaseStrategy):
         # --- Filters ---
         adx_ok = adx_val > settings.adx_trending_threshold
         vol_ok = vol_ratio > 1.0
-        macd_ok = (macd_hist > 0 and direction == SignalDirection.LONG) or \
-                  (macd_hist < 0 and direction == SignalDirection.SHORT)
-
         if not adx_ok:
             return None
 
@@ -105,7 +110,24 @@ class EMACrossoverStrategy(BaseStrategy):
         # --- Scoring ---
         regime_align = 1.0 if "TRENDING" in regime else 0.3
         primary_score = 1.0 if is_fresh_cross else 0.8
-        confirm_score = 1.0 if macd_ok else 0.3
+        if direction == SignalDirection.LONG:
+            if macd_hist > 0.5:
+                confirm_score = 1.0
+            elif macd_hist > 0:
+                confirm_score = 0.7
+            elif macd_hist > -0.5:
+                confirm_score = 0.5
+            else:
+                confirm_score = 0.2
+        else:
+            if macd_hist < -0.5:
+                confirm_score = 1.0
+            elif macd_hist < 0:
+                confirm_score = 0.7
+            elif macd_hist < 0.5:
+                confirm_score = 0.5
+            else:
+                confirm_score = 0.2
         volume_sc = min(vol_ratio / 1.5, 1.0) if vol_ok else 0.2
         htf_score = self._higher_tf_alignment(higher_tf_df, direction)
 
