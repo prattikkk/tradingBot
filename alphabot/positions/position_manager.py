@@ -156,6 +156,9 @@ class PositionManager:
         self._positions: Dict[str, Position] = {}
         self._monitor_task: Optional[asyncio.Task] = None
         self._running = False
+        # Cache for per-symbol ATR values used in trailing stop calculations.
+        # Populated from strategy/execution layer via update_atr_cache().
+        self._atr_cache: Dict[str, float] = {}
 
     def set_order_executor(self, executor) -> None:
         self.order_executor = executor
