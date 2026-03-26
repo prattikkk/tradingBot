@@ -39,6 +39,25 @@ class PullbackMomentumStrategy(BaseStrategy):
         def dbg(reason: str) -> None:
             if not candle_ts:
                 return
+
+            # Track block reasons for auditability (in-memory, per-process)
+            counts = getattr(self, "_pmc_block_counts", {})
+            counts[reason] = int(counts.get(reason, 0)) + 1
+            setattr(self, "_pmc_block_counts", counts)
+
+            # Emit a periodic summary (once per hour per process)
+            try:
+                import time
+                now = int(time.time())
+                last_sum = int(getattr(self, "_pmc_last_summary", 0) or 0)
+                if now - last_sum >= 3600 and counts:
+                    top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:8]
+                    top_str = ", ".join([f"{k}={v}" for k, v in top])
+                    logger.info(f"[{self.name}] hourly block summary: {top_str}")
+                    setattr(self, "_pmc_last_summary", now)
+            except Exception:
+                pass
+
             last = getattr(self, "_pmc_last_dbg", {})
             if last.get(key) == candle_ts:
                 return

@@ -371,7 +371,7 @@ class PositionManager:
         while self._running:
             try:
                 for pos in list(self.open_positions):
-                    price = self.data_store.get_price(pos.symbol)
+                    price = self._get_monitor_price(pos)
                     if price is None:
                         continue
 
@@ -446,6 +446,24 @@ class PositionManager:
                 logger.error(f"[PosManager] Monitor loop error: {e}")
 
             await asyncio.sleep(1)  # Poll every 1 second
+
+    def _get_monitor_price(self, pos: Position) -> Optional[Decimal]:
+        """
+        Prefer last CLOSED candle close for SL/TP checks to avoid mark-price spikes
+        causing immediate stop-outs. Falls back to latest mark price if candle data
+        is unavailable.
+        """
+        try:
+            tf = settings.primary_timeframe
+            df = self.data_store.get_dataframe(pos.symbol, tf)
+            if not df.empty:
+                close_val = df.iloc[-1].get("close")
+                if close_val is not None:
+                    return Decimal(str(close_val))
+        except Exception:
+            pass
+
+        return self.data_store.get_price(pos.symbol)
 
     def _check_stop_loss(self, pos: Position, price: Decimal) -> bool:
         if pos.direction == "LONG":
