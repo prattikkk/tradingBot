@@ -7,6 +7,7 @@ Also serves a simple HTML dashboard.
 from __future__ import annotations
 
 import asyncio
+import math
 from typing import Optional
 
 from loguru import logger
@@ -24,6 +25,11 @@ def create_app(get_state_fn) -> "FastAPI":
     """Create the FastAPI app with routes."""
     app = FastAPI(title="AlphaBot Dashboard", version="1.0")
 
+    def _safe_json(data):
+        # Starlette's JSONResponse disallows NaN/Infinity by default.
+        # Convert non-finite floats to None so the dashboard doesn't crash.
+        return _sanitize_for_json(data)
+
     @app.get("/", response_class=HTMLResponse)
     async def dashboard():
         state = get_state_fn()
@@ -31,29 +37,39 @@ def create_app(get_state_fn) -> "FastAPI":
 
     @app.get("/api/status")
     async def api_status():
-        return JSONResponse(get_state_fn())
+        return JSONResponse(_safe_json(get_state_fn()))
 
     @app.get("/api/positions")
     async def api_positions():
         state = get_state_fn()
-        return JSONResponse(state.get("open_positions", []))
+        return JSONResponse(_safe_json(state.get("open_positions", [])))
 
     @app.get("/api/trades")
     async def api_trades():
         state = get_state_fn()
-        return JSONResponse(state.get("recent_trades", []))
+        return JSONResponse(_safe_json(state.get("recent_trades", [])))
 
     @app.get("/api/stats")
     async def api_stats():
         state = get_state_fn()
-        return JSONResponse(state.get("stats", {}))
+        return JSONResponse(_safe_json(state.get("stats", {})))
 
     @app.get("/api/risk")
     async def api_risk():
         state = get_state_fn()
-        return JSONResponse(state.get("risk_status", {}))
+        return JSONResponse(_safe_json(state.get("risk_status", {})))
 
     return app
+
+
+def _sanitize_for_json(value):
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _sanitize_for_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_for_json(v) for v in value]
+    return value
 
 
 class DashboardServer:
