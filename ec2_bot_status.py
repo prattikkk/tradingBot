@@ -72,6 +72,16 @@ def _http_json(url: str, timeout: float = 3.0) -> Optional[dict]:
         return None
 
 
+def _http_json_list(url: str, timeout: float = 3.0) -> Optional[list]:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw)
+        return data if isinstance(data, list) else None
+    except Exception:
+        return None
+
+
 def _is_isoish_timestamp(s: str) -> bool:
     # Very small heuristic: ISO timestamps usually contain 'T' and ':'
     return isinstance(s, str) and ("T" in s) and (":" in s)
@@ -449,6 +459,8 @@ def main() -> int:
     db_path = next((p for p in db_candidates if p and os.path.exists(p)), db_candidates[1])
 
     status = _http_json("http://127.0.0.1:8080/api/status")
+    api_trades = _http_json_list("http://127.0.0.1:8080/api/trades")
+    api_stats = _http_json("http://127.0.0.1:8080/api/stats")
 
     trade_table, db_stats, state, deep = _db_trade_stats(db_path)
 
@@ -472,6 +484,32 @@ def main() -> int:
         print("daily_pnl:", _fmt_money(daily_pnl))
         print("total_pnl:", _fmt_money(total_pnl))
         print("open_positions:", len(open_positions) if isinstance(open_positions, list) else "n/a")
+
+    if api_stats is not None:
+        print("\nDashboard stats (in-memory, from /api/stats)")
+        for k in ("total_trades", "win_rate", "profit_factor", "sharpe_ratio", "avg_win", "avg_loss"):
+            if k in api_stats:
+                v = api_stats.get(k)
+                if k in ("win_rate",):
+                    # Dashboard uses percent already
+                    print(f"{k}:", _fmt_num(v))
+                else:
+                    print(f"{k}:", v)
+
+    if api_trades is not None:
+        print("\nDashboard recent trades (in-memory, from /api/trades)")
+        print("api_trades_count:", len(api_trades))
+        for t in api_trades[:10]:
+            if isinstance(t, dict):
+                # print key fields similar to UI table
+                print({
+                    "symbol": t.get("symbol"),
+                    "direction": t.get("direction"),
+                    "net_pnl": t.get("net_pnl"),
+                    "exit_reason": t.get("exit_reason"),
+                    "duration_minutes": t.get("duration_minutes"),
+                    "strategy_name": t.get("strategy_name"),
+                })
 
     print("\nDB performance")
     print("trades_total:", db_stats.trades_total)
@@ -523,6 +561,20 @@ def main() -> int:
         print("\nLast trades (most recent first)")
         for t in db_stats.last_trades[:5]:
             print(t)
+
+    # Explicitly call out API-vs-DB mismatch (this is what the screenshot shows)
+    if api_stats is not None:
+        api_total_trades = api_stats.get("total_trades")
+        try:
+            api_total_trades_n = int(api_total_trades)
+        except Exception:
+            api_total_trades_n = None
+        if api_total_trades_n is not None and api_total_trades_n != db_stats.trades_total:
+            print("\nDiscrepancy")
+            print("dashboard_total_trades:", api_total_trades_n)
+            print("db_trades_total:", db_stats.trades_total)
+            print("explanation: dashboard uses in-memory state (recent_trades/stats), DB query reads alphabot_data.db")
+            print("likely causes: different DB path/volume, DB not being written, or dashboard including trades from another source")
 
     # Balance drop explanation (best-effort)
     if status is not None:
