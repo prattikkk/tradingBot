@@ -128,6 +128,89 @@ class PnLTracker:
         )
         return trade
 
+    def _db_aggregate_stats(self) -> Optional[dict]:
+        """Compute stats from persisted DB so dashboard stays correct after restarts."""
+        try:
+            trades = self.db.get_trades(limit=1000000)
+        except Exception as e:
+            logger.error(f"[PnL] Failed to read trades from DB for stats: {e}")
+            return None
+
+        if not trades:
+            return {
+                "total_trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "win_rate": 0.0,
+                "total_pnl": 0.0,
+                "gross_profit": 0.0,
+                "gross_loss": 0.0,
+                "profit_factor": 0.0,
+                "avg_win": 0.0,
+                "avg_loss": 0.0,
+                "sharpe_ratio": 0.0,
+            }
+
+        total_trades = len(trades)
+        wins = 0
+        losses = 0
+        total_pnl = Decimal("0")
+        gross_profit = Decimal("0")
+        gross_loss = Decimal("0")
+        returns: List[float] = []
+
+        for t in trades:
+            try:
+                net = Decimal(str(getattr(t, "net_pnl", 0.0) or 0.0))
+                gross = Decimal(str(getattr(t, "gross_pnl", 0.0) or 0.0))
+            except Exception:
+                continue
+            total_pnl += net
+            returns.append(float(net))
+            if net > 0:
+                wins += 1
+                if gross > 0:
+                    gross_profit += gross
+            else:
+                losses += 1
+                if gross < 0:
+                    gross_loss += abs(gross)
+                else:
+                    gross_loss += abs(gross)
+
+        win_rate = (wins / total_trades) * 100 if total_trades else 0.0
+        if gross_loss == 0:
+            profit_factor = float("inf") if gross_profit > 0 else 0.0
+        else:
+            profit_factor = float(gross_profit / gross_loss)
+
+        avg_win = float(gross_profit / wins) if wins else 0.0
+        avg_loss = float(gross_loss / losses) if losses else 0.0
+
+        # Sharpe from DB-derived returns (no numpy dependency)
+        sharpe = 0.0
+        if len(returns) >= 2:
+            mean = sum(returns) / len(returns)
+            var = sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)
+            std = var ** 0.5
+            if std != 0:
+                annualization_factor = (252 * 96) ** 0.5
+                sharpe = (mean / std) * annualization_factor
+
+        return {
+            "total_trades": total_trades,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": round(win_rate, 2),
+            "total_pnl": float(total_pnl),
+            "gross_profit": float(gross_profit),
+            "gross_loss": float(gross_loss),
+            "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else float("inf"),
+            "avg_win": round(avg_win, 2),
+            "avg_loss": round(avg_loss, 2),
+            "sharpe_ratio": round(sharpe, 2),
+        }
+
     def _write_journal_row(self, trade: TradeRecord) -> None:
         """Append trade to CSV journal."""
         try:
@@ -188,6 +271,11 @@ class PnLTracker:
 
     def get_stats(self) -> dict:
         """Return performance statistics for dashboard."""
+        db_stats = self._db_aggregate_stats()
+        if db_stats is not None:
+            return db_stats
+
+        # Fallback to runtime stats if DB read fails
         return {
             "total_trades": self._total_trades,
             "wins": self._wins,
