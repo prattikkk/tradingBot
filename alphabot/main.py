@@ -74,10 +74,19 @@ async def main() -> None:
     client = BinanceTestnetClient()
     await client.connect()
 
-    # Get initial balance
+    # Get initial account snapshot
+    account_snapshot: dict = {}
     try:
-        balance = await client.get_usdt_balance()
-        logger.info(f"Account balance: ${balance:,.2f} USDT")
+        account_snapshot = await client.get_futures_account_snapshot()
+        available = float(account_snapshot.get("availableBalance", 0) or 0)
+        wallet = float(account_snapshot.get("walletBalance", 0) or 0)
+        margin = float(account_snapshot.get("marginBalance", 0) or 0)
+        unreal = float(account_snapshot.get("unrealizedProfit", 0) or 0)
+        balance = available
+        logger.info(
+            f"Account snapshot (futures): available=${available:,.2f} wallet=${wallet:,.2f} "
+            f"margin=${margin:,.2f} unrealized=${unreal:,.2f}"
+        )
     except Exception as e:
         logger.warning(f"Could not fetch balance (using default): {e}")
         balance = 10000.0  # Testnet default
@@ -92,8 +101,10 @@ async def main() -> None:
 
     async def refresh_balance() -> None:
         nonlocal balance
+        nonlocal account_snapshot
         try:
-            balance = await client.get_usdt_balance()
+            account_snapshot = await client.get_futures_account_snapshot()
+            balance = float(account_snapshot.get("availableBalance", 0) or 0)
             risk_manager.initialize(Decimal(str(balance)), db=db, reset_runtime=False)
             logger.info(f"Balance refreshed: ${balance:,.2f}")
         except Exception as e:
@@ -155,7 +166,13 @@ async def main() -> None:
         return {
             "bot_status": bot_status,
             "uptime": uptime,
+            # Match Binance Futures UI semantics as closely as possible.
+            # 'balance' stays as availableBalance for sizing, but we also expose wallet/margin/unrealized.
             "balance": balance,
+            "available_balance": float(account_snapshot.get("availableBalance", 0) or 0),
+            "wallet_balance": float(account_snapshot.get("walletBalance", 0) or 0),
+            "margin_balance": float(account_snapshot.get("marginBalance", 0) or 0),
+            "unrealized_pnl": float(account_snapshot.get("unrealizedProfit", 0) or 0),
             "daily_pnl": risk_status.get("daily_pnl", 0),
             "total_pnl": stats.get("total_pnl", 0),
             "drawdown": 0.0,

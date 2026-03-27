@@ -474,13 +474,22 @@ def main() -> int:
     else:
         bot_status = status.get("bot_status")
         balance = status.get("balance")
+        available_balance = status.get("available_balance")
+        wallet_balance = status.get("wallet_balance")
+        margin_balance = status.get("margin_balance")
+        unrealized_pnl = status.get("unrealized_pnl")
         daily_pnl = status.get("daily_pnl")
         total_pnl = status.get("total_pnl")
         open_positions = status.get("open_positions", [])
 
         print("\nLive")
         print("bot_status:", bot_status)
-        print("balance:", _fmt_money(balance))
+        print("balance (available):", _fmt_money(balance))
+        if available_balance is not None or wallet_balance is not None or margin_balance is not None or unrealized_pnl is not None:
+            print("available_balance:", _fmt_money(available_balance))
+            print("wallet_balance:", _fmt_money(wallet_balance))
+            print("margin_balance:", _fmt_money(margin_balance))
+            print("unrealized_pnl:", _fmt_money(unrealized_pnl))
         print("daily_pnl:", _fmt_money(daily_pnl))
         print("total_pnl:", _fmt_money(total_pnl))
         print("open_positions:", len(open_positions) if isinstance(open_positions, list) else "n/a")

@@ -85,6 +85,25 @@ class BinanceTestnetClient:
         usdt = balance.get("USDT", {})
         return float(usdt.get("free", 0))
 
+    async def get_futures_account_snapshot(self) -> dict:
+        """Fetch Binance Futures account snapshot.
+
+        Returns a dict with keys (best-effort, may vary by CCXT version):
+        - walletBalance
+        - marginBalance
+        - availableBalance
+        - unrealizedProfit
+        - totalInitialMargin / totalMaintMargin / totalMarginBalance, etc.
+
+        This is the closest match to what Binance Futures UI displays.
+        """
+        try:
+            # CCXT Binance: fapiPrivateV2GetAccount corresponds to /fapi/v2/account
+            return await self.exchange.fapiPrivateV2GetAccount()
+        except Exception as e:
+            logger.warning(f"[Client] Futures account snapshot failed: {e}")
+            return {}
+
     async def get_positions(self) -> list:
         """Fetch all open positions."""
         positions = await self.exchange.fetch_positions()
