@@ -97,12 +97,49 @@ class BinanceTestnetClient:
 
         This is the closest match to what Binance Futures UI displays.
         """
+        def _pick_asset_field(info: dict, asset: str, field: str) -> Optional[float]:
+            assets = info.get("assets")
+            if not isinstance(assets, list):
+                return None
+            for a in assets:
+                if not isinstance(a, dict):
+                    continue
+                if str(a.get("asset", "")).upper() != asset.upper():
+                    continue
+                try:
+                    return float(a.get(field))
+                except Exception:
+                    return None
+            return None
+
         try:
             # CCXT Binance: fapiPrivateV2GetAccount corresponds to /fapi/v2/account
-            return await self.exchange.fapiPrivateV2GetAccount()
+            info = await self.exchange.fapiPrivateV2GetAccount()
         except Exception as e:
             logger.warning(f"[Client] Futures account snapshot failed: {e}")
             return {}
+
+        # Binance Futures account response often provides per-asset balances under 'assets'.
+        # Normalize to a flat shape so the dashboard can display the same numbers as UI.
+        if isinstance(info, dict):
+            usdt_wallet = _pick_asset_field(info, "USDT", "walletBalance")
+            usdt_unreal = _pick_asset_field(info, "USDT", "unrealizedProfit")
+            usdt_margin = _pick_asset_field(info, "USDT", "marginBalance")
+            usdt_available = _pick_asset_field(info, "USDT", "availableBalance")
+
+            normalized = dict(info)
+            if usdt_wallet is not None:
+                normalized["walletBalance"] = usdt_wallet
+            if usdt_margin is not None:
+                normalized["marginBalance"] = usdt_margin
+            if usdt_available is not None:
+                normalized["availableBalance"] = usdt_available
+            if usdt_unreal is not None:
+                normalized["unrealizedProfit"] = usdt_unreal
+
+            return normalized
+
+        return {}
 
     async def get_positions(self) -> list:
         """Fetch all open positions."""
