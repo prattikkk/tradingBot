@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import os
 import signal
 import sys
 from decimal import Decimal
@@ -82,6 +83,12 @@ async def main() -> None:
         balance = 10000.0  # Testnet default
 
     risk_manager.initialize(Decimal(str(balance)), db=db)
+
+    # Optional manual resume after a drawdown halt.
+    # This is intentionally NOT automatic; it requires an explicit env var on restart.
+    if os.getenv("ALPHABOT_MANUAL_RESUME", "").strip().lower() in {"1", "true", "yes"}:
+        risk_manager.manual_resume()
+        logger.warning("[Risk] ALPHABOT_MANUAL_RESUME enabled — drawdown halt cleared")
 
     async def refresh_balance() -> None:
         nonlocal balance
