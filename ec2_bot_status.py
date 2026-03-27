@@ -56,6 +56,13 @@ def _fmt_pct(v: Any) -> str:
     return f"{f * 100:.1f}%"
 
 
+def _fmt_num(v: Any) -> str:
+    f = _safe_float(v)
+    if f is None:
+        return "n/a"
+    return f"{f:.4f}" if abs(f) < 100 else f"{f:.2f}"
+
+
 def _http_json(url: str, timeout: float = 3.0) -> Optional[dict]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
@@ -78,6 +85,13 @@ class DbTradeStats:
     last_trades: List[dict] = None
 
 
+@dataclass
+class DbIntrospection:
+    tables: List[str]
+    table_cols: Dict[str, List[str]]
+    warnings: List[str]
+
+
 def _find_table(cur: sqlite3.Cursor, preferred: Iterable[str], contains: Optional[str] = None) -> Optional[str]:
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
     tables = [r[0] for r in cur.fetchall()]
@@ -92,6 +106,22 @@ def _find_table(cur: sqlite3.Cursor, preferred: Iterable[str], contains: Optiona
                 return t
 
     return None
+
+
+def _introspect_db(cur: sqlite3.Cursor) -> DbIntrospection:
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+    tables = [r[0] for r in cur.fetchall()]
+    table_cols: Dict[str, List[str]] = {}
+    warnings: List[str] = []
+
+    for t in tables:
+        try:
+            table_cols[t] = _table_cols(cur, t)
+        except Exception as e:
+            warnings.append(f"failed PRAGMA table_info({t}): {e}")
+            table_cols[t] = []
+
+    return DbIntrospection(tables=tables, table_cols=table_cols, warnings=warnings)
 
 
 def _table_cols(cur: sqlite3.Cursor, table: str) -> List[str]:
@@ -117,6 +147,8 @@ def _db_trade_stats(db_path: str) -> Tuple[Optional[str], DbTradeStats, Dict[str
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
+    introspection = _introspect_db(cur)
+
     trade_table = _find_table(cur, ["trades", "trade", "trade_records", "trade_record"], contains="trade")
     state_table = _find_table(cur, ["bot_state", "state", "botstate"], contains="state")
 
@@ -124,11 +156,36 @@ def _db_trade_stats(db_path: str) -> Tuple[Optional[str], DbTradeStats, Dict[str
     window_start = now - timedelta(hours=24)
 
     if trade_table:
-        cols = _table_cols(cur, trade_table)
+        cols = introspection.table_cols.get(trade_table) or _table_cols(cur, trade_table)
         pnl_col = _pick_col(cols, "pnl", "realized_pnl", "profit", "profit_usd", "pnl_usd")
         ts_col = _pick_col(cols, "closed_at", "timestamp", "ts", "time", "created_at")
         sym_col = _pick_col(cols, "symbol", "pair")
         reason_col = _pick_col(cols, "reason", "close_reason", "exit_reason")
+
+        # If we can't find a clear PnL column, try to derive it.
+        # Common patterns: entry_price/exit_price/qty/side/leverage.
+        if pnl_col is None:
+            entry_col = _pick_col(cols, "entry_price", "entry")
+            exit_col = _pick_col(cols, "exit_price", "exit")
+            qty_col = _pick_col(cols, "qty", "quantity", "size", "amount")
+            side_col = _pick_col(cols, "side", "direction")
+            lev_col = _pick_col(cols, "leverage")
+            fee_col = _pick_col(cols, "fees", "fee", "fees_paid")
+
+            if entry_col and exit_col and qty_col and side_col:
+                # We'll compute pnl as:
+                # LONG: (exit-entry)*qty*lev ; SHORT: (entry-exit)*qty*lev
+                # If leverage missing, default to 1.
+                lev_expr = lev_col if lev_col else "1"
+                side_expr = "LOWER(" + side_col + ")"
+                fee_expr = fee_col if fee_col else "0"
+                pnl_expr = (
+                    "(CASE WHEN " + side_expr + " IN ('long','buy') THEN "
+                    "(CAST(" + exit_col + " AS REAL) - CAST(" + entry_col + " AS REAL)) "
+                    "ELSE (CAST(" + entry_col + " AS REAL) - CAST(" + exit_col + " AS REAL)) END) "
+                    "* CAST(" + qty_col + " AS REAL) * CAST(" + lev_expr + " AS REAL) - CAST(" + fee_expr + " AS REAL)"
+                )
+                pnl_col = pnl_expr
 
         if pnl_col:
             q = (
@@ -155,14 +212,28 @@ def _db_trade_stats(db_path: str) -> Tuple[Optional[str], DbTradeStats, Dict[str
             stats.win_rate_24h = (float(wins) / float(n)) if n else None
 
         order_col = ts_col if ts_col else "rowid"
-        select_cols = [c for c in [sym_col, pnl_col, ts_col, reason_col] if c] or ["rowid"]
-        q = (
-            "SELECT " + ", ".join(select_cols) +
-            " FROM " + trade_table +
-            " ORDER BY " + order_col + " DESC LIMIT 10"
-        )
-        for row in cur.execute(q).fetchall():
-            stats.last_trades.append({select_cols[i]: row[i] for i in range(len(select_cols))})
+        base_cols = [c for c in [sym_col, ts_col, reason_col] if c]
+        select_cols = base_cols or ["rowid"]
+
+        # For derived PnL expression we can't select it by name reliably across DBs.
+        if pnl_col and pnl_col in cols:
+            select_cols = [sym_col, pnl_col, ts_col, reason_col]
+            select_cols = [c for c in select_cols if c]
+            q = (
+                "SELECT " + ", ".join(select_cols) +
+                " FROM " + trade_table +
+                " ORDER BY " + order_col + " DESC LIMIT 10"
+            )
+            for row in cur.execute(q).fetchall():
+                stats.last_trades.append({select_cols[i]: row[i] for i in range(len(select_cols))})
+        else:
+            q = (
+                "SELECT " + ", ".join(select_cols) +
+                " FROM " + trade_table +
+                " ORDER BY " + order_col + " DESC LIMIT 10"
+            )
+            for row in cur.execute(q).fetchall():
+                stats.last_trades.append({select_cols[i]: row[i] for i in range(len(select_cols))})
 
     if state_table:
         try:
@@ -172,6 +243,8 @@ def _db_trade_stats(db_path: str) -> Tuple[Optional[str], DbTradeStats, Dict[str
             pass
 
     conn.close()
+    # Attach introspection for printing by returning it through state under a reserved key.
+    state["__introspection_tables"] = ",".join(introspection.tables)
     return trade_table, stats, state
 
 
@@ -226,10 +299,32 @@ def main() -> int:
             if k in state:
                 print(f"{k}:", state[k])
 
+        # Always show what tables exist (useful when stats are missing).
+        tables_csv = state.get("__introspection_tables")
+        if tables_csv:
+            print("db_tables:", tables_csv)
+
     if db_stats.last_trades:
         print("\nLast trades (most recent first)")
         for t in db_stats.last_trades[:5]:
             print(t)
+
+    # Balance drop explanation (best-effort)
+    if status is not None:
+        print("\nBalance reconciliation (best-effort)")
+        live_balance = _safe_float(status.get("balance"))
+        live_total_pnl = _safe_float(status.get("total_pnl"))
+        db_total_pnl = db_stats.pnl_total
+        if live_balance is None:
+            print("live_balance: n/a")
+        else:
+            print("live_balance:", _fmt_money(live_balance))
+        print("live_total_pnl:", _fmt_money(live_total_pnl))
+        print("db_pnl_total:", _fmt_money(db_total_pnl))
+        if live_total_pnl is not None and db_total_pnl is not None:
+            print("pnl_gap (live - db):", _fmt_money(live_total_pnl - db_total_pnl))
+            print("note: gap usually = fees/untracked trades or schema mismatch")
+        print("note: balance can change due to realized PnL + fees + funding + manual testnet wallet actions")
 
     return 0
 
