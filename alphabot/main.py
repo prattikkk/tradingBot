@@ -143,6 +143,12 @@ async def main() -> None:
         """Collect full bot state for dashboard."""
         stats = pnl_tracker.get_stats()
         risk_status = risk_manager.get_status()
+
+        peak_balance = float(risk_status.get("peak_balance", 0) or 0)
+        if peak_balance > 0:
+            drawdown = max(0.0, (peak_balance - float(balance)) / peak_balance * 100.0)
+        else:
+            drawdown = 0.0
         recent = db.get_trades(limit=20)
         trade_dicts = []
         for t in recent:
@@ -175,7 +181,7 @@ async def main() -> None:
             "unrealized_pnl": float(account_snapshot.get("unrealizedProfit", 0) or 0),
             "daily_pnl": risk_status.get("daily_pnl", 0),
             "total_pnl": stats.get("total_pnl", 0),
-            "drawdown": 0.0,
+            "drawdown": drawdown,
             "regimes": regime_detector.get_current_regimes() if hasattr(regime_detector, 'get_current_regimes') else regime_detector._last_regime,
             "open_positions": position_manager.open_positions_dicts,
             "recent_trades": trade_dicts,
