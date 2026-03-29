@@ -6,3 +6,6 @@ logs/
 *.sqlite
 *.sqlite3
 *.pem
+*.pyo
+alphabot_data.db
+*.db-*
