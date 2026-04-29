@@ -51,7 +51,7 @@ REGIME_STRATEGY_MAP: Dict[MarketRegime, List[type]] = {
 }
 
 SPECIALIZED_TREND_STRATEGIES = {"supertrend_trail", "supertrend_pullback"}
-SPECIALIZED_SELECTION_MARGIN = 3.0
+SPECIALIZED_SELECTION_MARGIN = 1.0
 
 
 class StrategyEngine:
@@ -95,7 +95,7 @@ class StrategyEngine:
             return None
 
         if regime == MarketRegime.HIGH_VOLATILITY:
-            logger.info(f"[Engine] {symbol}: HIGH_VOLATILITY regime — no trades")
+            logger.info(f"[Engine] {symbol}: HIGH_VOLATILITY regime — range strategies only")
 
         # Get strategy classes for this regime
         strategy_classes = REGIME_STRATEGY_MAP.get(regime, [])

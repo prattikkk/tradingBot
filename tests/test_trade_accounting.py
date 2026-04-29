@@ -99,9 +99,9 @@ def test_position_manager_partial_realization_accumulates_correctly():
     # Final partial: close 5 at 95 (-25 gross)
     manager._record_realized_component(pos, Decimal("5"), Decimal("95"))
 
-    # Gross total = +25; total roundtrip fees = 1000 * 0.0008 = 0.8
+    # Gross total = +25; total roundtrip fees = 1000 * 0.001 = 1.0
     assert pos.realized_pnl == Decimal("25")
-    assert pos.fees_paid == Decimal("0.8")
+    assert pos.fees_paid == Decimal("1.0")
 
     effective_exit = manager._effective_exit_price(
         direction=pos.direction,
@@ -276,8 +276,8 @@ def test_fee_aware_breakeven_price_covers_roundtrip_fee():
         size_usdt=Decimal("100"),
     )
 
-    assert manager._fee_aware_breakeven_price(long_pos) == Decimal("100.08")
-    assert manager._fee_aware_breakeven_price(short_pos) == Decimal("99.92")
+    assert manager._fee_aware_breakeven_price(long_pos) == Decimal("100.100")
+    assert manager._fee_aware_breakeven_price(short_pos) == Decimal("99.900")
 
 
 @pytest.mark.asyncio
@@ -318,7 +318,7 @@ async def test_tp1_resyncs_protective_stop_order():
     await manager._handle_tp1(pos, Decimal("110"))
 
     assert pos.remaining_qty == Decimal("5")
-    assert pos.sl_price == Decimal("100.08")
+    assert pos.sl_price == Decimal("100.100")
     assert pos.sl_order_ids == ["new-sl"]
 
     order_executor.cancel_order.assert_awaited_with("ETHUSDT", "old-sl")
@@ -326,6 +326,6 @@ async def test_tp1_resyncs_protective_stop_order():
         symbol="ETHUSDT",
         side="SELL",
         quantity=5.0,
-        stop_price=100.08,
+        stop_price=100.1,
         reduce_only=True,
     )

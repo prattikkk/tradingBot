@@ -574,7 +574,7 @@ class TestStrategyEngineSelection:
     def test_prefers_specialized_signal_when_close_confidence(self):
         candidates = [
             self._mk_signal("supertrend_rsi", 80.0),
-            self._mk_signal("supertrend_trail", 78.5),
+            self._mk_signal("supertrend_trail", 79.5),  # within 1.0 margin
         ]
 
         selected = StrategyEngine._select_best_signal(candidates)

@@ -240,6 +240,25 @@ class PositionManager:
                 )
                 if entry_order:
                     pos.order_ids.append(str(entry_order.get("orderId", "")))
+                    # Update entry price to actual exchange fill price to avoid SL
+                    # distance mismatch caused by REST polling lag (signal price can
+                    # be 0-30s stale when using REST fallback).
+                    actual_fill = (
+                        entry_order.get("avgPrice")
+                        or entry_order.get("average")
+                        or entry_order.get("price")
+                    )
+                    if actual_fill:
+                        try:
+                            fill_price = Decimal(str(actual_fill))
+                            if fill_price > 0:
+                                pos.entry_price = fill_price
+                                logger.info(
+                                    f"[PosManager] {signal.symbol}: entry fill "
+                                    f"{fill_price} (signal was {signal.entry_price})"
+                                )
+                        except Exception:
+                            pass
 
                 # Stop-loss order (placed immediately after entry)
                 sl_side = "SELL" if signal.direction == SignalDirection.LONG else "BUY"

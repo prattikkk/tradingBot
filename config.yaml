@@ -31,16 +31,16 @@ market_data:
 strategies:
   supertrend_rsi:
     rsi_long_min: 50
-    rsi_short_max: 50
+    rsi_short_max: 58       # raised from 50 — allows SHORT entries on pullback completions (RSI 50-58)
     volume_multiplier: 1.1
     atr_sl_multiplier: 1.6
     atr_tp1_multiplier: 2.5
     atr_tp2_multiplier: 4.0
-    max_extension_atr: 1.5
+    max_extension_atr: 2.0  # raised from 1.5 — allows SHORT entries in strong downmoves
 
   supertrend_pullback:
     rsi_long_min: 54
-    rsi_short_max: 46
+    rsi_short_max: 52       # raised from 46 — allows SHORT pullback entries up to RSI 52
     volume_multiplier: 1.15
     adx_min: 20
     pullback_band_atr: 0.6
@@ -51,7 +51,7 @@ strategies:
 
   supertrend_trail:
     rsi_long_min: 52
-    rsi_short_max: 48
+    rsi_short_max: 55       # raised from 48 — allows SHORT trend-continuation entries up to RSI 55
     volume_multiplier: 1.1
     adx_min: 18
     breakout_buffer_atr: 0.1
@@ -114,7 +114,7 @@ risk:
   max_leverage: 5
   min_risk_reward: 1.5
   min_net_risk_reward: 1.15
-  estimated_roundtrip_fee_rate: 0.0008
+  estimated_roundtrip_fee_rate: 0.001   # 0.05% per side taker = 0.10% roundtrip (was 0.0008)
   min_stop_distance_pct: 0.5
   max_consecutive_losses: 3
   consecutive_loss_cooldown_minutes: 30

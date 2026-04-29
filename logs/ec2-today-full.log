@@ -1,0 +1,121 @@
+﻿alphabot  | [32m2026-04-29 14:19:36.838[0m | [1mINFO    [0m | [36malphabot.utils.logger[0m:[36msetup_logger[0m:[36m61[0m | Logger initialized
+alphabot  | [32m2026-04-29 14:19:36.839[0m | [1mINFO    [0m | [36m__main__[0m:[36mmain[0m:[36m33[0m | ============================================================
+alphabot  | [32m2026-04-29 14:19:36.839[0m | [1mINFO    [0m | [36m__main__[0m:[36mmain[0m:[36m34[0m |    ΓÜí AlphaBot ΓÇö Adaptive Algorithmic Trading System
+alphabot  | [32m2026-04-29 14:19:36.840[0m | [1mINFO    [0m | [36m__main__[0m:[36mmain[0m:[36m35[0m |    Environment: TESTNET
+alphabot  | [32m2026-04-29 14:19:36.840[0m | [1mINFO    [0m | [36m__main__[0m:[36mmain[0m:[36m36[0m |    Pairs: BTCUSDT, ETHUSDT, SOLUSDT
+alphabot  | [32m2026-04-29 14:19:36.840[0m | [1mINFO    [0m | [36m__main__[0m:[36mmain[0m:[36m37[0m |    Timeframe: 15m
+alphabot  | [32m2026-04-29 14:19:36.840[0m | [1mINFO    [0m | [36m__main__[0m:[36mmain[0m:[36m38[0m |    Max Leverage: 5x
+alphabot  | [32m2026-04-29 14:19:36.841[0m | [1mINFO    [0m | [36m__main__[0m:[36mmain[0m:[36m39[0m |    Risk Per Trade: 0.5%
+alphabot  | [32m2026-04-29 14:19:36.841[0m | [1mINFO    [0m | [36m__main__[0m:[36mmain[0m:[36m40[0m | ============================================================
+alphabot  | [32m2026-04-29 14:19:37.178[0m | [1mINFO    [0m | [36m__main__[0m:[36mmain[0m:[36m45[0m | Database initialized
+alphabot  | [32m2026-04-29 14:19:37.475[0m | [1mINFO    [0m | [36malphabot.data.timeframe_manager[0m:[36mconfigure_default_stack[0m:[36m102[0m | [TFManager] Stack: entry=['15m'] bias=['1h', '4h']
+alphabot  | [32m2026-04-29 14:19:37.476[0m | [1mINFO    [0m | [36malphabot.data.timeframe_manager[0m:[36mconfigure_default_stack[0m:[36m106[0m | TimeframeManager stack:
+alphabot  |   15m     [ENTRY] <- bias from 1h
+alphabot  |   1h      [BIAS]
+alphabot  |   4h      [BIAS]
+alphabot  | [32m2026-04-29 14:19:39.047[0m | [1mINFO    [0m | [36malphabot.execution.testnet_client[0m:[36mconnect[0m:[36m56[0m | [Client] Connected to Binance TESTNET
+alphabot  | [32m2026-04-29 14:19:40.727[0m | [1mINFO    [0m | [36m__main__[0m:[36mmain[0m:[36m116[0m | Account snapshot (futures): available=$3,366.35 wallet=$3,366.35 margin=$3,366.35 unrealized=$0.00
+alphabot  | [32m2026-04-29 14:19:40.739[0m | [1mINFO    [0m | [36malphabot.risk.risk_manager[0m:[36minitialize[0m:[36m88[0m | [Risk] Initialized: balance=3366.35105761 peak=3381.64281732
+alphabot  | [32m2026-04-29 14:19:41.133[0m | [1mINFO    [0m | [36malphabot.notifications.telegram_bot[0m:[36mstart[0m:[36m40[0m | [Telegram] No token/chat_id configured ΓÇö skipping
+alphabot  | [32m2026-04-29 14:19:41.395[0m | [1mINFO    [0m | [36malphabot.dashboard.terminal_ui[0m:[36mstart[0m:[36m50[0m | [Dashboard] Terminal UI started
+alphabot  | [32m2026-04-29 14:19:41.897[0m | [1mINFO    [0m | [36malphabot.dashboard.api[0m:[36mstart[0m:[36m105[0m | [Dashboard] Web dashboard started at http://0.0.0.0:8080
+alphabot  | [32m2026-04-29 14:19:42.061[0m | [1mINFO    [0m | [36malphabot.data.data_store[0m:[36mload_historical[0m:[36m96[0m | Loaded 199 historical candles for BTCUSDT 15m
+alphabot  | [32m2026-04-29 14:19:42.062[0m | [1mINFO    [0m | [36malphabot.data.websocket_client[0m:[36m_fetch_all_historical[0m:[36m121[0m | Loaded 199 historical 15m candles for BTCUSDT
+alphabot  | [32m2026-04-29 14:19:42.204[0m | [1mINFO    [0m | [36malphabot.data.data_store[0m:[36mload_historical[0m:[36m96[0m | Loaded 199 historical candles for BTCUSDT 1h
+alphabot  | [32m2026-04-29 14:19:42.204[0m | [1mINFO    [0m | [36malphabot.data.websocket_client[0m:[36m_fetch_all_historical[0m:[36m121[0m | Loaded 199 historical 1h candles for BTCUSDT
+alphabot  | [32m2026-04-29 14:19:42.345[0m | [1mINFO    [0m | [36malphabot.data.data_store[0m:[36mload_historical[0m:[36m96[0m | Loaded 199 historical candles for BTCUSDT 4h
+alphabot  | [32m2026-04-29 14:19:42.346[0m | [1mINFO    [0m | [36malphabot.data.websocket_client[0m:[36m_fetch_all_historical[0m:[36m121[0m | Loaded 199 historical 4h candles for BTCUSDT
+alphabot  | [32m2026-04-29 14:19:42.491[0m | [1mINFO    [0m | [36malphabot.data.data_store[0m:[36mload_historical[0m:[36m96[0m | Loaded 199 historical candles for ETHUSDT 15m
+alphabot  | [32m2026-04-29 14:19:42.492[0m | [1mINFO    [0m | [36malphabot.data.websocket_client[0m:[36m_fetch_all_historical[0m:[36m121[0m | Loaded 199 historical 15m candles for ETHUSDT
+alphabot  | [32m2026-04-29 14:19:42.633[0m | [1mINFO    [0m | [36malphabot.data.data_store[0m:[36mload_historical[0m:[36m96[0m | Loaded 199 historical candles for ETHUSDT 1h
+alphabot  | [32m2026-04-29 14:19:42.633[0m | [1mINFO    [0m | [36malphabot.data.websocket_client[0m:[36m_fetch_all_historical[0m:[36m121[0m | Loaded 199 historical 1h candles for ETHUSDT
+alphabot  | [32m2026-04-29 14:19:42.773[0m | [1mINFO    [0m | [36malphabot.data.data_store[0m:[36mload_historical[0m:[36m96[0m | Loaded 199 historical candles for ETHUSDT 4h
+alphabot  | [32m2026-04-29 14:19:42.773[0m | [1mINFO    [0m | [36malphabot.data.websocket_client[0m:[36m_fetch_all_historical[0m:[36m121[0m | Loaded 199 historical 4h candles for ETHUSDT
+alphabot  | [32m2026-04-29 14:19:42.917[0m | [1mINFO    [0m | [36malphabot.data.data_store[0m:[36mload_historical[0m:[36m96[0m | Loaded 199 historical candles for SOLUSDT 15m
+alphabot  | [32m2026-04-29 14:19:42.917[0m | [1mINFO    [0m | [36malphabot.data.websocket_client[0m:[36m_fetch_all_historical[0m:[36m121[0m | Loaded 199 historical 15m candles for SOLUSDT
+alphabot  | [32m2026-04-29 14:19:43.057[0m | [1mINFO    [0m | [36malphabot.data.data_store[0m:[36mload_historical[0m:[36m96[0m | Loaded 199 historical candles for SOLUSDT 1h
+alphabot  | [32m2026-04-29 14:19:43.058[0m | [1mINFO    [0m | [36malphabot.data.websocket_client[0m:[36m_fetch_all_historical[0m:[36m121[0m | Loaded 199 historical 1h candles for SOLUSDT
+alphabot  | [32m2026-04-29 14:19:43.198[0m | [1mINFO    [0m | [36malphabot.data.data_store[0m:[36mload_historical[0m:[36m96[0m | Loaded 199 historical candles for SOLUSDT 4h
+alphabot  | [32m2026-04-29 14:19:43.199[0m | [1mINFO    [0m | [36malphabot.data.websocket_client[0m:[36m_fetch_all_historical[0m:[36m121[0m | Loaded 199 historical 4h candles for SOLUSDT
+alphabot  | [32m2026-04-29 14:19:43.199[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36mstart[0m:[36m50[0m | [MarketData] REST fallback enabled ΓÇö polling every 30s
+alphabot  | [32m2026-04-29 14:19:43.200[0m | [1mINFO    [0m | [36malphabot.data.websocket_client[0m:[36mstart[0m:[36m54[0m | WebSocket client started
+alphabot  | [32m2026-04-29 14:19:43.201[0m | [1mINFO    [0m | [36malphabot.positions.position_manager[0m:[36mstart_monitor[0m:[36m191[0m | [PosManager] Monitor loop started
+alphabot  | [32m2026-04-29 14:19:43.202[0m | [1mINFO    [0m | [36m__main__[0m:[36mmain[0m:[36m351[0m | ≡ƒÜÇ AlphaBot is running! Press Ctrl+C to stop.
+alphabot  | [32m2026-04-29 14:19:43.202[0m | [1mINFO    [0m | [36malphabot.data.websocket_client[0m:[36m_run_websocket[0m:[36m208[0m | Connecting to WebSocket: wss://fstream.binance.com/stream?streams=btcusdt@kline_15m/btcusdt@kline_1h/btcu...
+alphabot  | [32m2026-04-29 14:19:43.591[0m | [1mINFO    [0m | [36malphabot.data.websocket_client[0m:[36m_run_websocket[0m:[36m213[0m | WebSocket connected successfully
+alphabot  | [32m2026-04-29 14:30:07.021[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=76691.20
+alphabot  | [32m2026-04-29 14:30:07.021[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: BTCUSDT 15m ---
+alphabot  | [32m2026-04-29 14:30:07.037[0m | [1mINFO    [0m | [36malphabot.regime.detector[0m:[36mdetect[0m:[36m74[0m | Regime change: BTCUSDT None ΓåÆ MarketRegime.TRENDING_DOWN
+alphabot  | [32m2026-04-29 14:30:07.513[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: ETHUSDT 15m close=2303.26
+alphabot  | [32m2026-04-29 14:30:07.513[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: ETHUSDT 15m ---
+alphabot  | [32m2026-04-29 14:30:07.520[0m | [1mINFO    [0m | [36malphabot.regime.detector[0m:[36mdetect[0m:[36m74[0m | Regime change: ETHUSDT None ΓåÆ MarketRegime.TRENDING_DOWN
+alphabot  | [32m2026-04-29 14:30:07.987[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: SOLUSDT 15m close=83.8800
+alphabot  | [32m2026-04-29 14:30:07.987[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: SOLUSDT 15m ---
+alphabot  | [32m2026-04-29 14:30:07.994[0m | [1mINFO    [0m | [36malphabot.regime.detector[0m:[36mdetect[0m:[36m74[0m | Regime change: SOLUSDT None ΓåÆ MarketRegime.TRENDING_DOWN
+alphabot  | [32m2026-04-29 14:30:08.318[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m195[0m | [MarketData] REST fallback applied 3 new candles
+alphabot  | [32m2026-04-29 14:45:13.771[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=76572.40
+alphabot  | [32m2026-04-29 14:45:13.772[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: BTCUSDT 15m ---
+alphabot  | [32m2026-04-29 14:45:14.243[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: ETHUSDT 15m close=2300.04
+alphabot  | [32m2026-04-29 14:45:14.243[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: ETHUSDT 15m ---
+alphabot  | [32m2026-04-29 14:45:14.717[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: SOLUSDT 15m close=83.8600
+alphabot  | [32m2026-04-29 14:45:14.717[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: SOLUSDT 15m ---
+alphabot  | [32m2026-04-29 14:45:15.047[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m195[0m | [MarketData] REST fallback applied 3 new candles
+alphabot  | [32m2026-04-29 15:00:21.096[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=76540.30
+alphabot  | [32m2026-04-29 15:00:21.096[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: BTCUSDT 15m ---
+alphabot  | [32m2026-04-29 15:00:21.291[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: BTCUSDT 1h close=76540.30
+alphabot  | [32m2026-04-29 15:00:21.567[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: ETHUSDT 15m close=2298.23
+alphabot  | [32m2026-04-29 15:00:21.568[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: ETHUSDT 15m ---
+alphabot  | [32m2026-04-29 15:00:21.764[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: ETHUSDT 1h close=2298.23
+alphabot  | [32m2026-04-29 15:00:22.040[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: SOLUSDT 15m close=83.7800
+alphabot  | [32m2026-04-29 15:00:22.041[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: SOLUSDT 15m ---
+alphabot  | [32m2026-04-29 15:00:22.236[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: SOLUSDT 1h close=83.7800
+alphabot  | [32m2026-04-29 15:00:22.371[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m195[0m | [MarketData] REST fallback applied 6 new candles
+alphabot  | [32m2026-04-29 15:15:27.772[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=76226.60
+alphabot  | [32m2026-04-29 15:15:27.772[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: BTCUSDT 15m ---
+alphabot  | [32m2026-04-29 15:15:28.250[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: ETHUSDT 15m close=2284.44
+alphabot  | [32m2026-04-29 15:15:28.250[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: ETHUSDT 15m ---
+alphabot  | [32m2026-04-29 15:15:28.729[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: SOLUSDT 15m close=83.2000
+alphabot  | [32m2026-04-29 15:15:28.729[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: SOLUSDT 15m ---
+alphabot  | [32m2026-04-29 15:15:29.069[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m195[0m | [MarketData] REST fallback applied 3 new candles
+alphabot  | [32m2026-04-29 15:30:03.649[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=76200.10
+alphabot  | [32m2026-04-29 15:30:03.649[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: BTCUSDT 15m ---
+alphabot  | [32m2026-04-29 15:30:04.129[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: ETHUSDT 15m close=2289.56
+alphabot  | [32m2026-04-29 15:30:04.129[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: ETHUSDT 15m ---
+alphabot  | [32m2026-04-29 15:30:04.610[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: SOLUSDT 15m close=83.4300
+alphabot  | [32m2026-04-29 15:30:04.611[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: SOLUSDT 15m ---
+alphabot  | [32m2026-04-29 15:30:04.946[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m195[0m | [MarketData] REST fallback applied 3 new candles
+alphabot  | [32m2026-04-29 15:45:10.559[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=75949.40
+alphabot  | [32m2026-04-29 15:45:10.560[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: BTCUSDT 15m ---
+alphabot  | [32m2026-04-29 15:45:11.036[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: ETHUSDT 15m close=2272.58
+alphabot  | [32m2026-04-29 15:45:11.036[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: ETHUSDT 15m ---
+alphabot  | [32m2026-04-29 15:45:11.544[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: SOLUSDT 15m close=83.1000
+alphabot  | [32m2026-04-29 15:45:11.544[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: SOLUSDT 15m ---
+alphabot  | [32m2026-04-29 15:45:11.877[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m195[0m | [MarketData] REST fallback applied 3 new candles
+alphabot  | [32m2026-04-29 16:00:17.977[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=75889.10
+alphabot  | [32m2026-04-29 16:00:17.977[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: BTCUSDT 15m ---
+alphabot  | [32m2026-04-29 16:00:18.175[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: BTCUSDT 1h close=75889.10
+alphabot  | [32m2026-04-29 16:00:18.314[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: BTCUSDT 4h close=75889.10
+alphabot  | [32m2026-04-29 16:00:18.455[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: ETHUSDT 15m close=2271.57
+alphabot  | [32m2026-04-29 16:00:18.456[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: ETHUSDT 15m ---
+alphabot  | [32m2026-04-29 16:00:18.655[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: ETHUSDT 1h close=2271.57
+alphabot  | [32m2026-04-29 16:00:18.794[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: ETHUSDT 4h close=2271.57
+alphabot  | [32m2026-04-29 16:00:18.938[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: SOLUSDT 15m close=83.2000
+alphabot  | [32m2026-04-29 16:00:18.938[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: SOLUSDT 15m ---
+alphabot  | [32m2026-04-29 16:00:19.137[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: SOLUSDT 1h close=83.2000
+alphabot  | [32m2026-04-29 16:00:19.276[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: SOLUSDT 4h close=83.2000
+alphabot  | [32m2026-04-29 16:00:19.277[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m195[0m | [MarketData] REST fallback applied 9 new candles
+alphabot  | [32m2026-04-29 16:15:24.343[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=76000.00
+alphabot  | [32m2026-04-29 16:15:24.344[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: BTCUSDT 15m ---
+alphabot  | [32m2026-04-29 16:15:24.811[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: ETHUSDT 15m close=2274.99
+alphabot  | [32m2026-04-29 16:15:24.811[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: ETHUSDT 15m ---
+alphabot  | [32m2026-04-29 16:15:25.289[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: SOLUSDT 15m close=83.4400
+alphabot  | [32m2026-04-29 16:15:25.289[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: SOLUSDT 15m ---
+alphabot  | [32m2026-04-29 16:15:25.621[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m195[0m | [MarketData] REST fallback applied 3 new candles
+alphabot  | [32m2026-04-29 16:30:00.036[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: ETHUSDT 15m close=2272.77
+alphabot  | [32m2026-04-29 16:30:00.037[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: ETHUSDT 15m ---
+alphabot  | [32m2026-04-29 16:30:00.511[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: SOLUSDT 15m close=83.0900
+alphabot  | [32m2026-04-29 16:30:00.512[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: SOLUSDT 15m ---
+alphabot  | [32m2026-04-29 16:30:00.849[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m195[0m | [MarketData] REST fallback applied 2 new candles
+alphabot  | [32m2026-04-29 16:30:30.993[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m187[0m | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=75810.00
+alphabot  | [32m2026-04-29 16:30:30.994[0m | [1mINFO    [0m | [36m__main__[0m:[36mon_entry_signal_ready[0m:[36m238[0m | --- Entry eval: BTCUSDT 15m ---
+alphabot  | [32m2026-04-29 16:30:32.172[0m | [33m[1mWARNING [0m | [36malphabot.data.websocket_client[0m:[36m_run_rest_fallback[0m:[36m195[0m | [MarketData] REST fallback applied 1 new candles
