@@ -125,3 +125,13 @@ class DataStore:
         if key not in self._buffers:
             return 0
         return len(self._buffers[key])
+
+    def latest_open_time(self, symbol: str, timeframe: str) -> Optional[datetime.datetime]:
+        key = self._key(symbol, timeframe)
+        df = self._buffers.get(key)
+        if df is None or df.empty:
+            return None
+        value = df.iloc[-1].get("open_time")
+        if pd.isna(value):
+            return None
+        return value

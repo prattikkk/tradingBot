@@ -5,8 +5,9 @@ time-based stops, and breakeven moves.
 
 Position Lifecycle:
   1. Signal approved → Position created + market order placed
-  2. SL/TP1 limit orders placed simultaneously
-  3. Monitor loop (every 1s): update PnL, check trailing stop
+    2. Protective SL order placed; TP logic handled by monitor loop
+        3. Monitor loop (every 1s): update PnL, check SL/TP/trailing
+             and keep protective SL aligned with remaining quantity
   4. TP1 hit → partial close 50%, move SL to breakeven
   5. TP2 hit → partial close 30%, trailing stop final 20%
   6. Position fully closed → trade logged, PnL updated, alert sent
@@ -81,6 +82,9 @@ class Position:
         self.order_ids: List[str] = []
         self.tp_order_ids: List[str] = []
         self.sl_order_ids: List[str] = []
+        self._last_sl_sync_price: Optional[Decimal] = None
+        self._last_sl_sync_qty: Optional[Decimal] = None
+        self._last_sl_sync_at: Optional[datetime.datetime] = None
         # Track highest/lowest price since entry for trailing stop
         self._peak_price = entry_price
         self._trough_price = entry_price
@@ -103,11 +107,11 @@ class Position:
         if self.direction == "LONG":
             if price > self._peak_price:
                 self._peak_price = price
-            self.unrealized_pnl = (price - self.entry_price) * self.remaining_qty * self.leverage
+            self.unrealized_pnl = (price - self.entry_price) * self.remaining_qty
         else:
             if price < self._trough_price:
                 self._trough_price = price
-            self.unrealized_pnl = (self.entry_price - price) * self.remaining_qty * self.leverage
+            self.unrealized_pnl = (self.entry_price - price) * self.remaining_qty
 
     def to_dict(self) -> dict:
         return {
@@ -200,9 +204,9 @@ class PositionManager:
     async def open_position(self, signal: Signal, size_info: dict) -> Optional[Position]:
         """
         Create a new position from an approved signal.
-        Places entry order + SL/TP orders.
+        Places entry order + protective SL order.
         """
-        position_id = str(uuid.uuid4())[:12]
+        position_id = str(uuid.uuid4())
         qty = size_info["quantity"]
         leverage = size_info["leverage"]
 
@@ -244,27 +248,13 @@ class PositionManager:
                     side=sl_side,
                     quantity=float(qty),
                     stop_price=float(signal.stop_loss),
+                    reduce_only=True,
                 )
                 if sl_order:
                     sl_id = str(sl_order.get("orderId", "") or sl_order.get("id", ""))
                     if sl_id:
                         pos.sl_order_ids = [sl_id]
                         pos.order_ids.append(sl_id)
-
-                # TP1 limit order
-                tp_side = "SELL" if signal.direction == SignalDirection.LONG else "BUY"
-                tp1_qty = float(qty * Decimal("0.5"))
-                tp1_order = await self.order_executor.place_limit_order(
-                    symbol=signal.symbol,
-                    side=tp_side,
-                    quantity=tp1_qty,
-                    price=float(signal.take_profit_1),
-                )
-                if tp1_order:
-                    tp_id = str(tp1_order.get("orderId", "") or tp1_order.get("id", ""))
-                    if tp_id:
-                        pos.tp_order_ids = [tp_id]
-                        pos.order_ids.append(tp_id)
 
             except Exception as e:
                 logger.error(f"[PosManager] Failed to place orders for {signal.symbol}: {e}")
@@ -300,56 +290,76 @@ class PositionManager:
         pos.closed_at = datetime.datetime.now(datetime.UTC)
         pos.close_reason = reason
 
-        # Calculate final PnL
-        if pos.direction == "LONG":
-            pos.realized_pnl = (price - pos.entry_price) * pos.remaining_qty * pos.leverage
-        else:
-            pos.realized_pnl = (pos.entry_price - price) * pos.remaining_qty * pos.leverage
+        # Realize remaining quantity using unlevered contract PnL.
+        # Quantity already represents notional exposure; multiplying by leverage double-counts risk.
+        close_qty = pos.remaining_qty if pos.remaining_qty > 0 else Decimal("0")
+        if close_qty > 0:
+            self._record_realized_component(pos, close_qty, price)
+            pos.remaining_qty = Decimal("0")
 
-        # Estimate fees (0.04% taker fee × 2 for open+close)
-        fees = float(pos.size_usdt) * 0.0004 * 2
-        pos.fees_paid = Decimal(str(fees))
         net_pnl = pos.realized_pnl - pos.fees_paid
 
         # Close via executor
-        if self.order_executor and pos.remaining_qty > 0:
+        if self.order_executor and close_qty > 0:
             try:
                 close_side = "SELL" if pos.direction == "LONG" else "BUY"
                 await self.order_executor.place_market_order(
                     symbol=pos.symbol,
                     side=close_side,
-                    quantity=float(pos.remaining_qty),
+                    quantity=float(close_qty),
+                    reduce_only=True,
                 )
                 # Cancel any outstanding orders for this position
                 await self.order_executor.cancel_all_orders(pos.symbol)
             except Exception as e:
                 logger.error(f"[PosManager] Error closing position {position_id}: {e}")
 
+        # Persist CLOSED position early so crash/restart recovery can't re-record trades.
+        try:
+            self._persist_position(pos)
+        except Exception as e:
+            logger.error(f"[PosManager] Failed to persist closed position {position_id}: {e}")
+
         # Record in PnL tracker (use remaining_qty to account for partial closes)
-        self.pnl_tracker.record_trade(
-            trade_id=pos.id,
-            symbol=pos.symbol,
-            direction=pos.direction,
-            entry_price=float(pos.entry_price),
-            exit_price=float(price),
-            quantity=float(pos.remaining_qty),
-            leverage=pos.leverage,
-            fees=fees,
-            strategy_name=pos.strategy_name,
-            regime=pos.regime,
-            signal_confidence=pos.signal_confidence,
-            exit_reason=reason,
-            open_time=pos.opened_at,
-            close_time=pos.closed_at,
-        )
+        try:
+            effective_exit = self._effective_exit_price(
+                direction=pos.direction,
+                entry_price=pos.entry_price,
+                quantity=pos.quantity,
+                gross_pnl=pos.realized_pnl,
+            )
+            self.pnl_tracker.record_trade(
+                trade_id=pos.id,
+                symbol=pos.symbol,
+                direction=pos.direction,
+                entry_price=float(pos.entry_price),
+                exit_price=float(effective_exit),
+                quantity=float(pos.quantity),
+                leverage=pos.leverage,
+                fees=float(pos.fees_paid),
+                strategy_name=pos.strategy_name,
+                regime=pos.regime,
+                signal_confidence=pos.signal_confidence,
+                exit_reason=reason,
+                open_time=pos.opened_at,
+                close_time=pos.closed_at,
+                gross_pnl_override=float(pos.realized_pnl),
+                net_pnl_override=float(net_pnl),
+            )
+        except Exception as e:
+            logger.error(f"[PosManager] Failed to record trade for {position_id}: {e}")
 
         # Update risk manager
-        self.risk_manager.record_trade_result(
-            pos.symbol, net_pnl, is_win=(net_pnl > 0), db=self.db
-        )
-
-        # Persist
-        self._persist_position(pos)
+        try:
+            self.risk_manager.record_trade_result(
+                pos.symbol,
+                net_pnl,
+                is_win=(net_pnl > 0),
+                strategy_name=pos.strategy_name,
+                db=self.db,
+            )
+        except Exception as e:
+            logger.error(f"[PosManager] Failed to record trade result for {position_id}: {e}")
 
         # Notify
         if self.notifier:
@@ -374,51 +384,51 @@ class PositionManager:
         while self._running:
             try:
                 for pos in list(self.open_positions):
-                    price = self._get_monitor_price(pos)
-                    if price is None:
+                    price_snapshot = self._get_monitor_prices(pos)
+                    if price_snapshot is None:
                         continue
+                    monitor_price, _, _ = price_snapshot
 
-                    pos.update_price(price)
+                    pos.update_price(monitor_price)
+
+                    # Use live mark/ticker price for trigger checks. This avoids falsely
+                    # triggering SL/TP from the already-closed candle range that happened
+                    # before the position was opened.
+                    stop_probe = monitor_price
+                    tp_probe = monitor_price
 
                     # Check stop-loss
-                    if self._check_stop_loss(pos, price):
-                        await self.close_position(pos.id, "SL_HIT", price)
+                    if self._check_stop_loss(pos, stop_probe):
+                        stop_reason = "BREAKEVEN_STOP" if pos.breakeven_moved else "SL_HIT"
+                        await self.close_position(pos.id, stop_reason, pos.sl_price)
                         continue
 
                     # Check TP1
-                    if not pos.tp1_hit and self._check_tp1(pos, price):
-                        await self._handle_tp1(pos, price)
+                    if not pos.tp1_hit and self._check_tp1(pos, tp_probe):
+                        await self._handle_tp1(pos, pos.tp1_price)
 
                     # Check TP2
-                    if pos.tp1_hit and not pos.tp2_hit and self._check_tp2(pos, price):
-                        await self._handle_tp2(pos, price)
+                    if pos.tp1_hit and not pos.tp2_hit and self._check_tp2(pos, tp_probe):
+                        await self._handle_tp2(pos, pos.tp2_price or monitor_price)
 
                     # Trailing stop check
-                    if pos.trailing_stop_active and self._check_trailing_stop(pos, price):
-                        await self.close_position(pos.id, "TRAILING_STOP", price)
+                    if pos.trailing_stop_active and self._check_trailing_stop(pos, stop_probe):
+                        trailing_exit = pos.trailing_stop_price or monitor_price
+                        await self.close_position(pos.id, "TRAILING_STOP", trailing_exit)
                         continue
 
-                    # Breakeven move: at 0.5R profit, move SL to entry
-                    if not pos.breakeven_moved and pos.r_multiple >= 0.5:
-                        pos.sl_price = pos.entry_price
+                    # Breakeven move: only after configurable R progress.
+                    if self._should_move_to_breakeven(pos):
+                        pos.sl_price = self._fee_aware_breakeven_price(pos)
                         pos.breakeven_moved = True
+                        await self._sync_protective_stop(pos, reason="BREAKEVEN_MOVE")
                         logger.info(f"[PosManager] {pos.id}: SL moved to breakeven")
-
-                    # Trailing stop activation: at 1R profit
-                    if not pos.trailing_stop_active and pos.r_multiple >= float(settings.trailing_stop_activation_r):
-                        pos.trailing_stop_active = True
-                        atr_val = self._get_atr(pos.symbol)
-                        if pos.direction == "LONG":
-                            pos.trailing_stop_price = price - Decimal(str(atr_val * 1.5))
-                        else:
-                            pos.trailing_stop_price = price + Decimal(str(atr_val * 1.5))
-                        logger.info(
-                            f"[PosManager] {pos.id}: Trailing stop activated at {pos.trailing_stop_price}"
-                        )
 
                     # Update trailing stop price
                     if pos.trailing_stop_active:
-                        self._update_trailing_stop(pos, price)
+                        trail_moved = self._update_trailing_stop(pos, monitor_price)
+                        if trail_moved:
+                            await self._sync_protective_stop(pos, reason="TRAIL_UPDATE")
 
                     # Time-based stop: if > N hours with < 20% progress toward TP
                     elapsed_hours = (datetime.datetime.now(datetime.UTC) - pos.opened_at).total_seconds() / 3600
@@ -426,12 +436,21 @@ class PositionManager:
                         tp_dist = abs(float(pos.tp1_price) - float(pos.entry_price))
                         if tp_dist > 0:
                             if pos.direction == "LONG":
-                                progress = (float(price) - float(pos.entry_price)) / tp_dist * 100
+                                progress = (float(monitor_price) - float(pos.entry_price)) / tp_dist * 100
                             else:
-                                progress = (float(pos.entry_price) - float(price)) / tp_dist * 100
+                                progress = (float(pos.entry_price) - float(monitor_price)) / tp_dist * 100
                             if progress < float(settings.time_stop_progress_pct):
-                                await self.close_position(pos.id, "TIME_STOP", price)
-                                continue
+                                # Only close if still losing; if slightly profitable, lock breakeven.
+                                if pos.r_multiple <= 0:
+                                    await self.close_position(pos.id, "TIME_STOP", monitor_price)
+                                    continue
+                                if not pos.breakeven_moved:
+                                    pos.sl_price = self._fee_aware_breakeven_price(pos)
+                                    pos.breakeven_moved = True
+                                    await self._sync_protective_stop(pos, reason="TIME_STOP_BREAKEVEN")
+                                    logger.info(
+                                        f"[PosManager] {pos.id}: TIME_STOP triggered but trade is green — SL moved to breakeven"
+                                    )
 
                     # Persist updated state
                     self.db.update_position(
@@ -450,23 +469,32 @@ class PositionManager:
 
             await asyncio.sleep(1)  # Poll every 1 second
 
-    def _get_monitor_price(self, pos: Position) -> Optional[Decimal]:
+    def _get_monitor_prices(self, pos: Position) -> Optional[tuple[Decimal, Decimal, Decimal]]:
         """
-        Prefer last CLOSED candle close for SL/TP checks to avoid mark-price spikes
-        causing immediate stop-outs. Falls back to latest mark price if candle data
-        is unavailable.
+        Return (price, price, price) where price is:
+        1) latest live ticker/mark price when available, else
+        2) latest closed-candle close as a safe fallback.
+
+        We intentionally avoid candle high/low probes here because those highs/lows can
+        include movement that happened before a newly-opened position existed.
         """
+        tick_price = self.data_store.get_price(pos.symbol)
+        if tick_price is not None:
+            return tick_price, tick_price, tick_price
+
         try:
             tf = settings.primary_timeframe
             df = self.data_store.get_dataframe(pos.symbol, tf)
             if not df.empty:
-                close_val = df.iloc[-1].get("close")
+                row = df.iloc[-1]
+                close_val = row.get("close")
                 if close_val is not None:
-                    return Decimal(str(close_val))
+                    close_price = Decimal(str(close_val))
+                    return close_price, close_price, close_price
         except Exception:
             pass
 
-        return self.data_store.get_price(pos.symbol)
+        return None
 
     def _check_stop_loss(self, pos: Position, price: Decimal) -> bool:
         if pos.direction == "LONG":
@@ -492,40 +520,71 @@ class PositionManager:
             return price <= pos.trailing_stop_price
         return price >= pos.trailing_stop_price
 
-    def _update_trailing_stop(self, pos: Position, price: Decimal) -> None:
+    @staticmethod
+    def _should_move_to_breakeven(pos: Position) -> bool:
+        return (not pos.breakeven_moved) and (
+            pos.r_multiple >= float(settings.breakeven_activation_r)
+        )
+
+    @staticmethod
+    def _fee_aware_breakeven_price(pos: Position) -> Decimal:
+        fee_rate = Decimal(str(settings.estimated_roundtrip_fee_rate))
+        if pos.direction == "LONG":
+            return pos.entry_price * (Decimal("1") + fee_rate)
+        return pos.entry_price * (Decimal("1") - fee_rate)
+
+    def _update_trailing_stop(self, pos: Position, price: Decimal) -> bool:
         """Move trailing stop in the direction of profit."""
         atr_val = self._get_atr(pos.symbol)
         trail_dist = Decimal(str(atr_val * 1.5))
+        moved = False
 
         if pos.direction == "LONG":
             new_stop = price - trail_dist
             if pos.trailing_stop_price is None or new_stop > pos.trailing_stop_price:
                 pos.trailing_stop_price = new_stop
                 pos.sl_price = new_stop
+                moved = True
         else:
             new_stop = price + trail_dist
             if pos.trailing_stop_price is None or new_stop < pos.trailing_stop_price:
                 pos.trailing_stop_price = new_stop
                 pos.sl_price = new_stop
+                moved = True
+
+        return moved
 
     async def _handle_tp1(self, pos: Position, price: Decimal) -> None:
         """Partial close at TP1: close 50%, move SL to breakeven."""
         close_qty = pos.remaining_qty * Decimal("0.5")
-        pos.remaining_qty -= close_qty
-        pos.tp1_hit = True
-        pos.sl_price = pos.entry_price  # Breakeven
-        pos.breakeven_moved = True
-        pos.status = "PARTIAL"
+        if close_qty <= 0:
+            return
 
         # Close partial via executor
+        executed = True
         if self.order_executor:
             try:
                 close_side = "SELL" if pos.direction == "LONG" else "BUY"
                 await self.order_executor.place_market_order(
-                    symbol=pos.symbol, side=close_side, quantity=float(close_qty)
+                    symbol=pos.symbol,
+                    side=close_side,
+                    quantity=float(close_qty),
+                    reduce_only=True,
                 )
             except Exception as e:
                 logger.error(f"[PosManager] TP1 partial close error: {e}")
+                executed = False
+
+        if not executed:
+            return
+
+        self._record_realized_component(pos, close_qty, price)
+        pos.remaining_qty -= close_qty
+        pos.tp1_hit = True
+        pos.sl_price = self._fee_aware_breakeven_price(pos)
+        pos.breakeven_moved = True
+        pos.status = "PARTIAL"
+        await self._sync_protective_stop(pos, reason="TP1")
 
         if self.notifier:
             asyncio.create_task(self.notifier.notify_tp1_hit(pos))
@@ -539,6 +598,27 @@ class PositionManager:
         """Partial close at TP2: close 30% of original, trailing stop on rest."""
         close_qty = pos.quantity * Decimal("0.3")
         close_qty = min(close_qty, pos.remaining_qty)
+        if close_qty <= 0:
+            return
+
+        executed = True
+        if self.order_executor:
+            try:
+                close_side = "SELL" if pos.direction == "LONG" else "BUY"
+                await self.order_executor.place_market_order(
+                    symbol=pos.symbol,
+                    side=close_side,
+                    quantity=float(close_qty),
+                    reduce_only=True,
+                )
+            except Exception as e:
+                logger.error(f"[PosManager] TP2 partial close error: {e}")
+                executed = False
+
+        if not executed:
+            return
+
+        self._record_realized_component(pos, close_qty, price)
         pos.remaining_qty -= close_qty
         pos.tp2_hit = True
 
@@ -548,20 +628,117 @@ class PositionManager:
 
         # Activate trailing stop on remainder
         pos.trailing_stop_active = True
-
-        if self.order_executor:
-            try:
-                close_side = "SELL" if pos.direction == "LONG" else "BUY"
-                await self.order_executor.place_market_order(
-                    symbol=pos.symbol, side=close_side, quantity=float(close_qty)
-                )
-            except Exception as e:
-                logger.error(f"[PosManager] TP2 partial close error: {e}")
+        await self._sync_protective_stop(pos, reason="TP2")
 
         logger.info(
             f"[PosManager] {pos.id}: TP2 hit — closed {close_qty}, "
             f"remaining={pos.remaining_qty} with trailing stop"
         )
+
+    async def _sync_protective_stop(self, pos: Position, reason: str) -> None:
+        """Recreate reduce-only stop order to match latest SL price and remaining size."""
+        if not self.order_executor:
+            return
+        if pos.status == "CLOSED" or pos.remaining_qty <= 0:
+            return
+
+        now = datetime.datetime.now(datetime.UTC)
+        if reason == "TRAIL_UPDATE":
+            # Throttle frequent trailing updates to avoid excessive cancel/recreate churn.
+            if (
+                pos._last_sl_sync_price is not None
+                and pos._last_sl_sync_qty is not None
+                and pos._last_sl_sync_qty == pos.remaining_qty
+                and pos._last_sl_sync_at is not None
+            ):
+                age_seconds = (now - pos._last_sl_sync_at).total_seconds()
+                atr_step = Decimal(str(self._get_atr(pos.symbol) * 0.2))
+                price_delta = abs(pos.sl_price - pos._last_sl_sync_price)
+                if age_seconds < 20 and price_delta < atr_step:
+                    return
+
+        try:
+            # Cancel previously tracked protective stops for this position.
+            for order_id in list(pos.sl_order_ids):
+                if not order_id:
+                    continue
+                try:
+                    await self.order_executor.cancel_order(pos.symbol, order_id)
+                except Exception as cancel_err:
+                    logger.debug(
+                        f"[PosManager] SL sync cancel skipped for {pos.id} order={order_id}: {cancel_err}"
+                    )
+
+            sl_side = "SELL" if pos.direction == "LONG" else "BUY"
+            sl_order = await self.order_executor.place_stop_market(
+                symbol=pos.symbol,
+                side=sl_side,
+                quantity=float(pos.remaining_qty),
+                stop_price=float(pos.sl_price),
+                reduce_only=True,
+            )
+
+            new_sl_id = ""
+            if sl_order:
+                new_sl_id = str(sl_order.get("orderId", "") or sl_order.get("id", ""))
+
+            pos.sl_order_ids = [new_sl_id] if new_sl_id else []
+            if new_sl_id and new_sl_id not in pos.order_ids:
+                pos.order_ids.append(new_sl_id)
+            pos._last_sl_sync_price = pos.sl_price
+            pos._last_sl_sync_qty = pos.remaining_qty
+            pos._last_sl_sync_at = now
+
+            # Persist refreshed stop IDs/prices for restart consistency.
+            self._persist_position(pos)
+            logger.info(
+                f"[PosManager] {pos.id}: Protective SL synced ({reason}) "
+                f"qty={pos.remaining_qty} stop={pos.sl_price}"
+            )
+        except Exception as e:
+            logger.error(f"[PosManager] Protective SL sync failed for {pos.id}: {e}")
+
+    @staticmethod
+    def _calculate_gross_pnl(
+        direction: str,
+        entry_price: Decimal,
+        exit_price: Decimal,
+        quantity: Decimal,
+    ) -> Decimal:
+        if direction == "LONG":
+            return (exit_price - entry_price) * quantity
+        return (entry_price - exit_price) * quantity
+
+    def _estimate_fee_component(self, pos: Position, close_qty: Decimal) -> Decimal:
+        if pos.quantity <= 0 or close_qty <= 0:
+            return Decimal("0")
+        ratio = close_qty / pos.quantity
+        total_roundtrip_fee = pos.size_usdt * Decimal(str(settings.estimated_roundtrip_fee_rate))
+        return total_roundtrip_fee * ratio
+
+    def _record_realized_component(self, pos: Position, close_qty: Decimal, exit_price: Decimal) -> None:
+        gross_component = self._calculate_gross_pnl(
+            direction=pos.direction,
+            entry_price=pos.entry_price,
+            exit_price=exit_price,
+            quantity=close_qty,
+        )
+        fee_component = self._estimate_fee_component(pos, close_qty)
+        pos.realized_pnl += gross_component
+        pos.fees_paid += fee_component
+
+    @staticmethod
+    def _effective_exit_price(
+        direction: str,
+        entry_price: Decimal,
+        quantity: Decimal,
+        gross_pnl: Decimal,
+    ) -> Decimal:
+        if quantity <= 0:
+            return entry_price
+        if direction == "LONG":
+            return entry_price + (gross_pnl / quantity)
+        return entry_price - (gross_pnl / quantity)
 
     def _get_atr(self, symbol: str) -> float:
         """Get latest ATR value for a symbol from cache.
@@ -622,6 +799,28 @@ class PositionManager:
         import json
         open_recs = self.db.get_open_positions()
         for rec in open_recs:
+            # If a trade already exists for this position ID, do not recover it as open.
+            # This protects against crashes that happened after recording the trade but
+            # before persisting the position as CLOSED.
+            try:
+                existing_trade = self.db.get_trade(str(rec.id))
+            except Exception:
+                existing_trade = None
+            if existing_trade is not None:
+                logger.warning(
+                    f"[PosManager] Recovery reconcile: {rec.id} is OPEN in DB but trade exists; marking CLOSED"
+                )
+                try:
+                    self.db.update_position(
+                        str(rec.id),
+                        status="CLOSED",
+                        close_timestamp=getattr(existing_trade, "close_timestamp", None),
+                        exit_reason=getattr(existing_trade, "exit_reason", None),
+                    )
+                except Exception as e:
+                    logger.error(f"[PosManager] Recovery reconcile failed for {rec.id}: {e}")
+                continue
+
             tp1 = getattr(rec, "tp1_price", None)
             tp2 = getattr(rec, "tp2_price", None)
             leverage_raw = getattr(rec, "leverage", settings.max_leverage)

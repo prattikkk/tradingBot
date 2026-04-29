@@ -1,8 +1,7 @@
 """
 AlphaBot Technical Indicator Helpers.
-Implements EMA, ATR, RSI, ADX, Bollinger Bands, Stochastic RSI, and MACD
-using pandas/numpy only.
-All calculations on CLOSED candles only — never on the current in-progress candle.
+Implements EMA, ATR, RSI, ADX, Supertrend, and volume/EMA slope helpers.
+All calculations on CLOSED candles only.
 """
 
 from __future__ import annotations
@@ -256,62 +255,58 @@ def ema_slope(series: pd.Series, period: int = 5) -> pd.Series:
 
 def compute_all_indicators(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
     """
-    Compute all indicators on a DataFrame with OHLCV columns.
+    Compute indicator set used by active strategies.
     Expects columns: open, high, low, close, volume
     Adds indicator columns in-place and returns the DataFrame.
     """
     cfg = config or {}
     ema_fast_p = cfg.get("ema_fast", 20)
     ema_slow_p = cfg.get("ema_slow", 50)
+    ema_long_p = cfg.get("ema_long", 200)
     atr_p = cfg.get("atr_period", 14)
     adx_p = cfg.get("adx_period", 14)
     rsi_p = cfg.get("rsi_period", 14)
-    bb_p = cfg.get("bb_period", 20)
-    bb_s = cfg.get("bb_std", 2.0)
+    volume_sma_p = cfg.get("volume_sma_period", 20)
+    ema_slope_p = cfg.get("ema_slope_period", 5)
+    supertrend_p = cfg.get("supertrend_period")
+    supertrend_mult = cfg.get("supertrend_multiplier")
 
     # EMAs
-    df["ema_fast"] = ema(df["close"], ema_fast_p)
-    df["ema_slow"] = ema(df["close"], ema_slow_p)
-    df["ema_9"] = ema(df["close"], 9)
+    df["ema_fast"] = ema(df["close"], int(ema_fast_p))
+    df["ema_slow"] = ema(df["close"], int(ema_slow_p))
+    if ema_long_p:
+        df["ema_long"] = ema(df["close"], int(ema_long_p))
 
     # ATR
-    df["atr"] = atr(df["high"], df["low"], df["close"], atr_p)
+    df["atr"] = atr(df["high"], df["low"], df["close"], int(atr_p))
 
     # ADX
-    adx_df = adx(df["high"], df["low"], df["close"], adx_p)
+    adx_df = adx(df["high"], df["low"], df["close"], int(adx_p))
     if adx_df is not None and not adx_df.empty:
         for col in adx_df.columns:
             df[col] = adx_df[col]
 
     # RSI
-    df["rsi"] = rsi(df["close"], rsi_p)
-
-    # Stochastic RSI
-    stoch = stochastic_rsi(df["close"], rsi_p)
-    if stoch is not None and not stoch.empty:
-        for col in stoch.columns:
-            df[col] = stoch[col]
-
-    # Bollinger Bands
-    bb = bollinger_bands(df["close"], bb_p, bb_s)
-    if bb is not None and not bb.empty:
-        for col in bb.columns:
-            df[col] = bb[col]
-
-    # BB Width
-    df["bb_width"] = bollinger_width(df["close"], bb_p, bb_s)
-
-    # MACD
-    macd_df = macd(df["close"])
-    if macd_df is not None and not macd_df.empty:
-        for col in macd_df.columns:
-            df[col] = macd_df[col]
+    df["rsi"] = rsi(df["close"], int(rsi_p))
 
     # Volume SMA
-    df["volume_sma"] = volume_sma(df["volume"], 20)
+    df["volume_sma"] = volume_sma(df["volume"], int(volume_sma_p))
 
     # EMA slope
-    df["ema_fast_slope"] = ema_slope(df["ema_fast"], 5)
-    df["ema_slow_slope"] = ema_slope(df["ema_slow"], 5)
+    df["ema_fast_slope"] = ema_slope(df["ema_fast"], int(ema_slope_p))
+    df["ema_slow_slope"] = ema_slope(df["ema_slow"], int(ema_slope_p))
+
+    # Supertrend
+    if supertrend_p and supertrend_mult:
+        st = supertrend(
+            df["high"],
+            df["low"],
+            df["close"],
+            int(supertrend_p),
+            float(supertrend_mult),
+        )
+        if st is not None and not st.empty:
+            for col in st.columns:
+                df[col] = st[col]
 
     return df

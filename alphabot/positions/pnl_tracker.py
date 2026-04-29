@@ -69,31 +69,37 @@ class PnLTracker:
         close_time: datetime.datetime,
         daily_pnl: float = 0.0,
         session_drawdown: float = 0.0,
+        gross_pnl_override: Optional[float] = None,
+        net_pnl_override: Optional[float] = None,
     ) -> TradeRecord:
         """Record a closed trade to DB and CSV journal."""
         # Calculate PnL
-        if direction == "LONG":
-            gross_pnl = (exit_price - entry_price) * quantity * leverage
+        if gross_pnl_override is None:
+            if direction == "LONG":
+                gross_pnl = (exit_price - entry_price) * quantity
+            else:
+                gross_pnl = (entry_price - exit_price) * quantity
         else:
-            gross_pnl = (entry_price - exit_price) * quantity * leverage
+            gross_pnl = gross_pnl_override
 
-        net_pnl = gross_pnl - fees
+        if net_pnl_override is None:
+            net_pnl = gross_pnl - fees
+        else:
+            net_pnl = net_pnl_override
         pnl_pct = (net_pnl / (entry_price * quantity)) * 100 if entry_price * quantity > 0 else 0
         duration = (close_time - open_time).total_seconds() / 60.0
+        journal_row = [
+            trade_id, symbol, direction,
+            entry_price, exit_price,
+            quantity, leverage,
+            gross_pnl, fees, net_pnl,
+            pnl_pct, duration,
+            strategy_name, regime,
+            signal_confidence, exit_reason,
+            daily_pnl, session_drawdown,
+        ]
 
-        # Update running stats
-        self._total_trades += 1
-        self._total_pnl += Decimal(str(net_pnl))
-        self._returns.append(net_pnl)
-
-        if net_pnl > 0:
-            self._wins += 1
-            self._gross_profit += Decimal(str(gross_pnl))
-        else:
-            self._losses += 1
-            self._gross_loss += abs(Decimal(str(gross_pnl)))
-
-        # Save to database
+        # Save to database (idempotent insert)
         trade = TradeRecord(
             id=trade_id,
             symbol=symbol,
@@ -116,13 +122,67 @@ class PnLTracker:
             daily_pnl_after=daily_pnl,
             session_drawdown_after=session_drawdown,
         )
-        self.db.save_trade(trade)
 
-        # Append to CSV journal
-        self._write_journal_row(trade)
+        try:
+            inserted = bool(self.db.save_trade(trade))
+        except Exception as e:
+            # DB failed — still write to CSV so we can backfill later.
+            logger.error(f"[PnL] Failed to persist trade_id={trade_id} to DB: {e}")
+
+            # Update runtime stats even if DB failed (dashboard can fall back).
+            self._total_trades += 1
+            self._total_pnl += Decimal(str(net_pnl))
+            self._returns.append(net_pnl)
+
+            if net_pnl > 0:
+                self._wins += 1
+                self._gross_profit += Decimal(str(gross_pnl))
+            else:
+                self._losses += 1
+                self._gross_loss += abs(Decimal(str(gross_pnl)))
+
+            self._write_journal_row(journal_row)
+            logger.info(
+                f"[PnL] Trade journaled (DB failed): id={trade_id} {symbol} {direction} "
+                f"PnL=${net_pnl:.2f} ({pnl_pct:.2f}%) reason={exit_reason} "
+                f"duration={duration:.1f}min"
+            )
+            return trade
+
+        if not inserted:
+            try:
+                existing = self.db.get_trade(trade_id)
+            except Exception:
+                existing = None
+            if existing is not None:
+                logger.warning(
+                    f"[PnL] Duplicate trade_id={trade_id} — skipping re-record "
+                    f"({symbol} {direction} reason={exit_reason})"
+                )
+                return existing
+            logger.warning(
+                f"[PnL] Trade not inserted (duplicate/unknown) trade_id={trade_id} "
+                f"({symbol} {direction} reason={exit_reason})"
+            )
+            return trade
+
+        # Update running stats only when the trade is first inserted
+        self._total_trades += 1
+        self._total_pnl += Decimal(str(net_pnl))
+        self._returns.append(net_pnl)
+
+        if net_pnl > 0:
+            self._wins += 1
+            self._gross_profit += Decimal(str(gross_pnl))
+        else:
+            self._losses += 1
+            self._gross_loss += abs(Decimal(str(gross_pnl)))
+
+        # Append to CSV journal only once per trade_id
+        self._write_journal_row(journal_row)
 
         logger.info(
-            f"[PnL] Trade recorded: {symbol} {direction} "
+            f"[PnL] Trade recorded: id={trade_id} {symbol} {direction} "
             f"PnL=${net_pnl:.2f} ({pnl_pct:.2f}%) reason={exit_reason} "
             f"duration={duration:.1f}min"
         )
@@ -211,21 +271,12 @@ class PnLTracker:
             "sharpe_ratio": round(sharpe, 2),
         }
 
-    def _write_journal_row(self, trade: TradeRecord) -> None:
+    def _write_journal_row(self, row: list) -> None:
         """Append trade to CSV journal."""
         try:
             with open(_JOURNAL_PATH, "a", newline="") as f:
                 writer = csv.writer(f)
-                writer.writerow([
-                    trade.id, trade.symbol, trade.direction,
-                    trade.entry_price, trade.exit_price,
-                    trade.quantity, trade.leverage,
-                    trade.gross_pnl, trade.fees, trade.net_pnl,
-                    trade.pnl_percent, trade.duration_minutes,
-                    trade.strategy_name, trade.regime_at_entry,
-                    trade.signal_confidence, trade.exit_reason,
-                    trade.daily_pnl_after, trade.session_drawdown_after,
-                ])
+                writer.writerow(row)
         except Exception as e:
             logger.error(f"[PnL] Failed to write journal: {e}")
 

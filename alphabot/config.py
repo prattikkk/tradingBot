@@ -136,115 +136,367 @@ class Settings(BaseSettings):
         ge=Decimal("1.2"),
         le=Decimal("3.0"),
     )
-
-    # ---- Strategy Parameters ----
-    atr_sl_multiplier: Decimal = Field(
-        default=_as_decimal(_yaml_get("strategies", "ema_crossover", "atr_sl_multiplier", default="1.5"), "1.5"),
+    min_net_risk_reward: Decimal = Field(
+        default=_as_decimal(_yaml_get("risk", "min_net_risk_reward", default="1.15"), "1.15"),
         ge=Decimal("1.0"),
         le=Decimal("3.0"),
     )
-    atr_tp_multiplier: Decimal = Field(
-        default=_as_decimal(_yaml_get("strategies", "ema_crossover", "atr_tp_multiplier", default="3.0"), "3.0"),
-        ge=Decimal("1.5"),
+    estimated_roundtrip_fee_rate: Decimal = Field(
+        default=_as_decimal(
+            _yaml_get("risk", "estimated_roundtrip_fee_rate", default="0.0008"), "0.0008"
+        ),
+        ge=Decimal("0.0"),
+        le=Decimal("0.005"),
+    )
+    min_stop_distance_pct: Decimal = Field(
+        default=_as_decimal(_yaml_get("risk", "min_stop_distance_pct", default="0.5"), "0.5"),
+        ge=Decimal("0.0"),
         le=Decimal("5.0"),
     )
+
+    # ---- Position Management ----
     trailing_stop_activation_r: Decimal = Field(default=Decimal("1.0"), ge=Decimal("0.5"), le=Decimal("2.0"))
+    breakeven_activation_r: Decimal = Field(
+        default=_as_decimal(_yaml_get("risk", "breakeven_activation_r", default="0.8"), "0.8"),
+        ge=Decimal("0.3"),
+        le=Decimal("2.0"),
+    )
+
+    # ---- Indicator Parameters ----
+    rsi_period: int = Field(
+        default=_as_int(_yaml_get("indicators", "rsi_period", default=14), 14),
+        ge=5,
+        le=50,
+    )
+    volume_sma_period: int = Field(
+        default=_as_int(_yaml_get("indicators", "volume_sma_period", default=20), 20),
+        ge=5,
+        le=200,
+    )
+    ema_slope_period: int = Field(
+        default=_as_int(_yaml_get("indicators", "ema_slope_period", default=5), 5),
+        ge=2,
+        le=20,
+    )
+    ema_long_period: int = Field(
+        default=_as_int(_yaml_get("indicators", "ema_long_period", default=200), 200),
+        ge=50,
+        le=400,
+    )
+    supertrend_period: int = Field(
+        default=_as_int(_yaml_get("indicators", "supertrend_period", default=10), 10),
+        ge=5,
+        le=50,
+    )
+    supertrend_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("indicators", "supertrend_multiplier", default="3.0"), "3.0"),
+        ge=Decimal("1.0"),
+        le=Decimal("5.0"),
+    )
+
+    # ---- Strategy Parameters: Supertrend + RSI ----
+    supertrend_rsi_long_min: int = Field(
+        default=_as_int(_yaml_get("strategies", "supertrend_rsi", "rsi_long_min", default=55), 55),
+        ge=40,
+        le=70,
+    )
+    supertrend_rsi_short_max: int = Field(
+        default=_as_int(_yaml_get("strategies", "supertrend_rsi", "rsi_short_max", default=45), 45),
+        ge=30,
+        le=60,
+    )
+    supertrend_volume_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_rsi", "volume_multiplier", default="1.1"), "1.1"),
+        ge=Decimal("0.5"),
+        le=Decimal("3.0"),
+    )
+    supertrend_atr_sl_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_rsi", "atr_sl_multiplier", default="1.6"), "1.6"),
+        ge=Decimal("0.8"),
+        le=Decimal("3.0"),
+    )
+    supertrend_atr_tp1_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_rsi", "atr_tp1_multiplier", default="2.5"), "2.5"),
+        ge=Decimal("1.0"),
+        le=Decimal("6.0"),
+    )
+    supertrend_atr_tp2_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_rsi", "atr_tp2_multiplier", default="4.0"), "4.0"),
+        ge=Decimal("1.5"),
+        le=Decimal("10.0"),
+    )
+    supertrend_max_extension_atr: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_rsi", "max_extension_atr", default="1.5"), "1.5"),
+        ge=Decimal("0.5"),
+        le=Decimal("4.0"),
+    )
+
+    # ---- Strategy Parameters: Supertrend Pullback ----
+    supertrend_pullback_rsi_long_min: int = Field(
+        default=_as_int(_yaml_get("strategies", "supertrend_pullback", "rsi_long_min", default=54), 54),
+        ge=40,
+        le=75,
+    )
+    supertrend_pullback_rsi_short_max: int = Field(
+        default=_as_int(_yaml_get("strategies", "supertrend_pullback", "rsi_short_max", default=46), 46),
+        ge=25,
+        le=60,
+    )
+    supertrend_pullback_volume_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_pullback", "volume_multiplier", default="1.15"), "1.15"),
+        ge=Decimal("0.8"),
+        le=Decimal("3.0"),
+    )
+    supertrend_pullback_adx_min: int = Field(
+        default=_as_int(_yaml_get("strategies", "supertrend_pullback", "adx_min", default=20), 20),
+        ge=10,
+        le=45,
+    )
+    supertrend_pullback_band_atr: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_pullback", "pullback_band_atr", default="0.6"), "0.6"),
+        ge=Decimal("0.2"),
+        le=Decimal("2.0"),
+    )
+    supertrend_pullback_atr_sl_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_pullback", "atr_sl_multiplier", default="1.4"), "1.4"),
+        ge=Decimal("0.8"),
+        le=Decimal("3.0"),
+    )
+    supertrend_pullback_atr_tp1_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_pullback", "atr_tp1_multiplier", default="2.8"), "2.8"),
+        ge=Decimal("1.2"),
+        le=Decimal("8.0"),
+    )
+    supertrend_pullback_atr_tp2_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_pullback", "atr_tp2_multiplier", default="4.6"), "4.6"),
+        ge=Decimal("1.8"),
+        le=Decimal("12.0"),
+    )
+    supertrend_pullback_max_extension_atr: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_pullback", "max_extension_atr", default="1.2"), "1.2"),
+        ge=Decimal("0.5"),
+        le=Decimal("4.0"),
+    )
+
+    # ---- Strategy Parameters: Supertrend Trail ----
+    supertrend_trail_rsi_long_min: int = Field(
+        default=_as_int(_yaml_get("strategies", "supertrend_trail", "rsi_long_min", default=52), 52),
+        ge=40,
+        le=75,
+    )
+    supertrend_trail_rsi_short_max: int = Field(
+        default=_as_int(_yaml_get("strategies", "supertrend_trail", "rsi_short_max", default=48), 48),
+        ge=25,
+        le=60,
+    )
+    supertrend_trail_volume_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_trail", "volume_multiplier", default="1.1"), "1.1"),
+        ge=Decimal("0.8"),
+        le=Decimal("3.0"),
+    )
+    supertrend_trail_adx_min: int = Field(
+        default=_as_int(_yaml_get("strategies", "supertrend_trail", "adx_min", default=18), 18),
+        ge=10,
+        le=45,
+    )
+    supertrend_trail_breakout_buffer_atr: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_trail", "breakout_buffer_atr", default="0.1"), "0.1"),
+        ge=Decimal("0.0"),
+        le=Decimal("1.0"),
+    )
+    supertrend_trail_atr_sl_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_trail", "atr_sl_multiplier", default="1.2"), "1.2"),
+        ge=Decimal("0.8"),
+        le=Decimal("3.0"),
+    )
+    supertrend_trail_atr_tp1_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_trail", "atr_tp1_multiplier", default="1.8"), "1.8"),
+        ge=Decimal("1.0"),
+        le=Decimal("8.0"),
+    )
+    supertrend_trail_atr_tp2_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_trail", "atr_tp2_multiplier", default="2.4"), "2.4"),
+        ge=Decimal("1.2"),
+        le=Decimal("12.0"),
+    )
+    supertrend_trail_max_extension_atr: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "supertrend_trail", "max_extension_atr", default="1.6"), "1.6"),
+        ge=Decimal("0.5"),
+        le=Decimal("4.0"),
+    )
+
+    # ---- Strategy Parameters: Order Flow + Liquidity Sweep ----
+    orderflow_sweep_lookback: int = Field(
+        default=_as_int(_yaml_get("strategies", "orderflow_liquidity_sweep", "lookback", default=20), 20),
+        ge=10,
+        le=100,
+    )
+    orderflow_sweep_min_wick_ratio: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "orderflow_liquidity_sweep", "min_wick_ratio", default="0.45"), "0.45"),
+        ge=Decimal("0.2"),
+        le=Decimal("0.9"),
+    )
+    orderflow_sweep_min_imbalance: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "orderflow_liquidity_sweep", "min_imbalance", default="0.12"), "0.12"),
+        ge=Decimal("0.05"),
+        le=Decimal("0.8"),
+    )
+    orderflow_sweep_rsi_long_max: int = Field(
+        default=_as_int(_yaml_get("strategies", "orderflow_liquidity_sweep", "rsi_long_max", default=52), 52),
+        ge=35,
+        le=65,
+    )
+    orderflow_sweep_rsi_short_min: int = Field(
+        default=_as_int(_yaml_get("strategies", "orderflow_liquidity_sweep", "rsi_short_min", default=48), 48),
+        ge=35,
+        le=65,
+    )
+    orderflow_sweep_volume_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "orderflow_liquidity_sweep", "volume_multiplier", default="1.1"), "1.1"),
+        ge=Decimal("0.8"),
+        le=Decimal("3.0"),
+    )
+    orderflow_sweep_stop_buffer_atr: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "orderflow_liquidity_sweep", "stop_buffer_atr", default="0.2"), "0.2"),
+        ge=Decimal("0.0"),
+        le=Decimal("1.5"),
+    )
+    orderflow_sweep_atr_tp1_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "orderflow_liquidity_sweep", "atr_tp1_multiplier", default="1.8"), "1.8"),
+        ge=Decimal("0.8"),
+        le=Decimal("8.0"),
+    )
+    orderflow_sweep_atr_tp2_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "orderflow_liquidity_sweep", "atr_tp2_multiplier", default="3.2"), "3.2"),
+        ge=Decimal("1.2"),
+        le=Decimal("12.0"),
+    )
+    orderflow_sweep_max_reclaim_atr: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "orderflow_liquidity_sweep", "max_reclaim_atr", default="1.4"), "1.4"),
+        ge=Decimal("0.4"),
+        le=Decimal("4.0"),
+    )
+
+    # ---- Strategy Parameters: Liquidity Sweep + Order Flow ----
+    liquidity_sweep_orderflow_enabled: bool = Field(
+        default=bool(_yaml_get("strategies", "liquidity_sweep_orderflow", "enabled", default=True))
+    )
+    liquidity_sweep_orderflow_swing_lookback: int = Field(
+        default=_as_int(_yaml_get("strategies", "liquidity_sweep_orderflow", "swing_lookback", default=10), 10),
+        ge=3,
+        le=100,
+    )
+    liquidity_sweep_orderflow_sweep_min_wick_pct: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "liquidity_sweep_orderflow", "sweep_min_wick_pct", default="0.05"), "0.05"),
+        ge=Decimal("0.01"),
+        le=Decimal("1.0"),
+    )
+    liquidity_sweep_orderflow_delta_window: int = Field(
+        default=_as_int(_yaml_get("strategies", "liquidity_sweep_orderflow", "delta_window", default=5), 5),
+        ge=2,
+        le=100,
+    )
+    liquidity_sweep_orderflow_cvd_slope_window: int = Field(
+        default=_as_int(_yaml_get("strategies", "liquidity_sweep_orderflow", "cvd_slope_window", default=20), 20),
+        ge=5,
+        le=300,
+    )
+    liquidity_sweep_orderflow_min_delta_ratio: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "liquidity_sweep_orderflow", "min_delta_ratio", default="0.1"), "0.1"),
+        ge=Decimal("0.01"),
+        le=Decimal("2.0"),
+    )
+    liquidity_sweep_orderflow_htf_ema_fast: int = Field(
+        default=_as_int(_yaml_get("strategies", "liquidity_sweep_orderflow", "htf_ema_fast", default=20), 20),
+        ge=5,
+        le=200,
+    )
+    liquidity_sweep_orderflow_htf_ema_slow: int = Field(
+        default=_as_int(_yaml_get("strategies", "liquidity_sweep_orderflow", "htf_ema_slow", default=50), 50),
+        ge=10,
+        le=400,
+    )
+    liquidity_sweep_orderflow_min_confidence: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "liquidity_sweep_orderflow", "min_confidence", default="0.45"), "0.45"),
+        ge=Decimal("0.0"),
+        le=Decimal("1.0"),
+    )
+    liquidity_sweep_orderflow_atr_period: int = Field(
+        default=_as_int(_yaml_get("strategies", "liquidity_sweep_orderflow", "atr_period", default=14), 14),
+        ge=5,
+        le=100,
+    )
+    liquidity_sweep_orderflow_sl_atr_mult: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "liquidity_sweep_orderflow", "sl_atr_mult", default="1.5"), "1.5"),
+        ge=Decimal("0.5"),
+        le=Decimal("6.0"),
+    )
+    liquidity_sweep_orderflow_tp1_atr_mult: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "liquidity_sweep_orderflow", "tp1_atr_mult", default="2.5"), "2.5"),
+        ge=Decimal("1.0"),
+        le=Decimal("10.0"),
+    )
+    liquidity_sweep_orderflow_tp2_atr_mult: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "liquidity_sweep_orderflow", "tp2_atr_mult", default="4.0"), "4.0"),
+        ge=Decimal("1.2"),
+        le=Decimal("15.0"),
+    )
+
+    # ---- Strategy Parameters: EMA + ADX + Volume ----
     ema_fast: int = Field(
-        default=_as_int(_yaml_get("strategies", "ema_crossover", "ema_fast", default=20), 20),
+        default=_as_int(_yaml_get("strategies", "ema_adx_volume", "ema_fast", default=9), 9),
         ge=5,
         le=50,
     )
     ema_slow: int = Field(
-        default=_as_int(_yaml_get("strategies", "ema_crossover", "ema_slow", default=50), 50),
-        ge=20,
+        default=_as_int(_yaml_get("strategies", "ema_adx_volume", "ema_slow", default=21), 21),
+        ge=10,
         le=200,
     )
-    rsi_oversold_long: int = Field(
-        default=_as_int(_yaml_get("strategies", "bb_reversion", "rsi_oversold", default=35), 35),
-        ge=20,
-        le=45,
-    )
-    rsi_overbought_short: int = Field(
-        default=_as_int(_yaml_get("strategies", "bb_reversion", "rsi_overbought", default=65), 65),
-        ge=55,
-        le=90,
-    )
-    stoch_rsi_oversold: int = Field(
-        default=_as_int(_yaml_get("strategies", "bb_reversion", "stoch_rsi_oversold", default=20), 20),
-        ge=5,
-        le=40,
-    )
-    stoch_rsi_overbought: int = Field(
-        default=_as_int(_yaml_get("strategies", "bb_reversion", "stoch_rsi_overbought", default=80), 80),
-        ge=60,
-        le=95,
-    )
-
-    # ---- PMC (Pullback Momentum Confluence) ----
-    pmc_volume_multiplier: Decimal = Field(
-        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "volume_multiplier", default="1.5"), "1.5"),
-        ge=Decimal("1.0"),
-        le=Decimal("5.0"),
-    )
-    pmc_adx_min_htf: int = Field(
-        default=_as_int(_yaml_get("strategies", "pullback_momentum", "adx_min_htf", default=20), 20),
+    ema_adx_min: int = Field(
+        default=_as_int(_yaml_get("strategies", "ema_adx_volume", "adx_min", default=22), 22),
         ge=10,
         le=40,
     )
-    pmc_rsi_oversold: int = Field(
-        default=_as_int(_yaml_get("strategies", "pullback_momentum", "rsi_oversold", default=42), 42),
-        ge=20,
-        le=60,
-    )
-    pmc_rsi_overbought: int = Field(
-        default=_as_int(_yaml_get("strategies", "pullback_momentum", "rsi_overbought", default=58), 58),
-        ge=40,
-        le=90,
-    )
-    pmc_rsi_confirmation_long: int = Field(
-        default=_as_int(_yaml_get("strategies", "pullback_momentum", "rsi_confirmation_long", default=48), 48),
-        ge=30,
-        le=70,
-    )
-    pmc_rsi_confirmation_short: int = Field(
-        default=_as_int(_yaml_get("strategies", "pullback_momentum", "rsi_confirmation_short", default=52), 52),
-        ge=30,
-        le=70,
-    )
-    pmc_atr_sl_multiplier: Decimal = Field(
-        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "atr_sl_multiplier", default="1.5"), "1.5"),
+    ema_adx_volume_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "ema_adx_volume", "volume_multiplier", default="1.2"), "1.2"),
         ge=Decimal("0.8"),
         le=Decimal("3.0"),
     )
-    pmc_atr_tp1_multiplier: Decimal = Field(
-        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "atr_tp1_multiplier", default="2.5"), "2.5"),
+    ema_adx_atr_sl_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "ema_adx_volume", "atr_sl_multiplier", default="1.6"), "1.6"),
+        ge=Decimal("0.8"),
+        le=Decimal("3.0"),
+    )
+    ema_adx_atr_tp1_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "ema_adx_volume", "atr_tp1_multiplier", default="2.5"), "2.5"),
         ge=Decimal("1.0"),
         le=Decimal("6.0"),
     )
-    pmc_atr_tp2_multiplier: Decimal = Field(
-        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "atr_tp2_multiplier", default="4.0"), "4.0"),
+    ema_adx_atr_tp2_multiplier: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "ema_adx_volume", "atr_tp2_multiplier", default="3.5"), "3.5"),
         ge=Decimal("1.5"),
         le=Decimal("10.0"),
     )
-    pmc_min_body_pct: Decimal = Field(
-        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "min_body_pct", default="0.35"), "0.35"),
-        ge=Decimal("0.1"),
-        le=Decimal("0.9"),
-    )
-    pmc_max_upper_wick_long: Decimal = Field(
-        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "max_upper_wick_long", default="0.40"), "0.40"),
-        ge=Decimal("0.05"),
-        le=Decimal("0.95"),
-    )
-    pmc_max_lower_wick_short: Decimal = Field(
-        default=_as_decimal(_yaml_get("strategies", "pullback_momentum", "max_lower_wick_short", default="0.40"), "0.40"),
-        ge=Decimal("0.05"),
-        le=Decimal("0.95"),
+    ema_adx_max_entry_range_atr: Decimal = Field(
+        default=_as_decimal(_yaml_get("strategies", "ema_adx_volume", "max_entry_range_atr", default="1.7"), "1.7"),
+        ge=Decimal("1.0"),
+        le=Decimal("4.0"),
     )
 
     # ---- Dashboard ----
     dashboard_host: str = Field(default="0.0.0.0")
     dashboard_port: int = Field(default=8080, ge=1024, le=65535)
+
+    # ---- Market Data ----
+    market_data_rest_fallback_enabled: bool = Field(
+        default=bool(_yaml_get("market_data", "rest_fallback_enabled", default=True))
+    )
+    market_data_poll_interval_seconds: int = Field(
+        default=_as_int(_yaml_get("market_data", "poll_interval_seconds", default=30), 30),
+        ge=5,
+        le=300,
+    )
 
     # ---- Logging ----
     log_level: str = Field(default="INFO")
@@ -284,8 +536,6 @@ class Settings(BaseSettings):
     # ---- Regime Detection ----
     adx_period: int = Field(default=_as_int(_yaml_get("regime_detection", "adx_period", default=14), 14))
     atr_period: int = Field(default=_as_int(_yaml_get("regime_detection", "atr_period", default=14), 14))
-    bb_period: int = Field(default=_as_int(_yaml_get("regime_detection", "bb_period", default=20), 20))
-    bb_std: int = Field(default=_as_int(_yaml_get("regime_detection", "bb_std", default=2), 2))
     adx_trending_threshold: int = Field(
         default=_as_int(_yaml_get("regime_detection", "adx_trending_threshold", default=25), 25)
     )

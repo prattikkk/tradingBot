@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from alphabot.database.models import Base, PositionRecord, TradeRecord, SignalLog, BotState
@@ -86,10 +87,32 @@ class Database:
                 s.commit()
 
     # ---- Trade Journal ----
-    def save_trade(self, trade: TradeRecord) -> None:
+    def get_trade(self, trade_id: str) -> Optional[TradeRecord]:
         with self.session() as s:
-            s.merge(trade)
-            s.commit()
+            return s.query(TradeRecord).filter_by(id=trade_id).first()
+
+    def save_trade(self, trade: TradeRecord) -> bool:
+        """Insert a trade if new.
+
+        Trades are immutable historical events in this system. We therefore avoid
+        `merge()` here, which can overwrite an existing trade when the same ID is
+        re-used (e.g., due to recovery/retry bugs).
+
+        Returns:
+            True if inserted, False if already exists.
+        """
+        with self.session() as s:
+            # Fast path: already present
+            if s.query(TradeRecord.id).filter_by(id=trade.id).first() is not None:
+                return False
+            try:
+                s.add(trade)
+                s.commit()
+                return True
+            except IntegrityError:
+                # Another writer inserted the same trade concurrently.
+                s.rollback()
+                return False
 
     def get_trades(self, limit: int = 100) -> List[TradeRecord]:
         with self.session() as s:

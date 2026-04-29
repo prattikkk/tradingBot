@@ -2,8 +2,7 @@
 AlphaBot Market Regime Detector.
 Classifies market as: TRENDING_UP, TRENDING_DOWN, RANGING, HIGH_VOLATILITY, UNCLEAR.
 
-Uses ADX, ATR, Bollinger Band Width, and EMA slope.
-Computed on each closed candle.
+Uses ADX, ATR, and EMA slope. Computed on closed candles only.
 """
 
 from __future__ import annotations
@@ -58,11 +57,12 @@ class RegimeDetector:
         df = compute_all_indicators(df, {
             "ema_fast": settings.ema_fast,
             "ema_slow": settings.ema_slow,
+            "ema_long": settings.ema_long_period,
             "atr_period": settings.atr_period,
             "adx_period": settings.adx_period,
-            "rsi_period": 14,
-            "bb_period": settings.bb_period,
-            "bb_std": settings.bb_std,
+            "rsi_period": settings.rsi_period,
+            "volume_sma_period": settings.volume_sma_period,
+            "ema_slope_period": settings.ema_slope_period,
         })
 
         if df.empty or len(df) < 30:
@@ -90,11 +90,6 @@ class RegimeDetector:
         atr_sma_20 = df["atr"].rolling(20).mean().iloc[-1] if "atr" in df.columns else atr_val
         atr_spike = atr_val > (float(settings.atr_volatility_multiplier) * atr_sma_20) if atr_sma_20 > 0 else False
 
-        # BB Width
-        bb_width = float(latest.get("bb_width", 0))
-        bb_width_sma = df["bb_width"].rolling(20).mean().iloc[-1] if "bb_width" in df.columns else bb_width
-        bb_expanded = bb_width > (float(settings.atr_volatility_multiplier) * bb_width_sma) if bb_width_sma > 0 else False
-
         # EMA slopes
         ema_fast_slope = float(latest.get("ema_fast_slope", 0))
         ema_slow_slope = float(latest.get("ema_slow_slope", 0))
@@ -104,10 +99,10 @@ class RegimeDetector:
         ema_slow_val = float(latest.get("ema_slow", 0))
 
         # ---- Classification Logic ----
-        # HIGH VOLATILITY: ATR spike or extreme BB expansion
-        if atr_spike or bb_expanded:
+        # HIGH VOLATILITY: ATR spike
+        if atr_spike:
             logger.debug(
-                f"{symbol} HIGH_VOLATILITY: atr_spike={atr_spike} bb_expanded={bb_expanded}"
+                f"{symbol} HIGH_VOLATILITY: atr_spike={atr_spike}"
             )
             return MarketRegime.HIGH_VOLATILITY
 

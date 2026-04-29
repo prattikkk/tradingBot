@@ -4,11 +4,9 @@ An autonomous, adaptive crypto futures trading bot for Binance USD-M Futures. Pa
 
 ## Features
 
-- **Adaptive Strategy Engine** — Auto-detects market regime (Trending/Ranging/Volatile) and selects optimal strategy
-- **3 Built-in Strategies**:
-  - EMA Crossover (trending markets)
-  - Bollinger Band Mean Reversion (ranging markets)
-  - ATR Breakout (high-volatility breakouts)
+- **Adaptive Strategy Engine** — Auto-detects market regime and selects the optimal strategy
+- **Built-in Strategy**:
+  - Supertrend + RSI + EMA200 (trend confirmation)
 - **Risk Management** — Hard-coded limits: daily loss cap, max drawdown, max positions, leverage caps
 - **Position Manager** — Full lifecycle with partial exits, trailing stops, breakeven moves
 - **Real-time Dashboard** — Terminal UI (Rich) + Web dashboard (FastAPI) at http://localhost:8080
@@ -57,7 +55,36 @@ The bot will:
 - **Web**: http://localhost:8080 (auto-refreshes every 5s)
 - **Telegram**: Configure bot token for mobile alerts
 - **Logs**: `logs/` directory (structured JSON, rotated at 50MB)
-- **Journal**: `trade_journal.csv` in project root
+- **Journal**: `data/trade_journal.csv` (CSV trade journal)
+
+## One-time: Backfill missing DB trades
+
+If your SQLite `trades` table is missing historical rows (e.g. DB was reset/overwritten), you can rebuild it from:
+- the CSV journal (trade details)
+- the structured JSON logs (open/close timestamps)
+
+Dry-run (safe):
+
+```bash
+python backfill_trades.py --dry-run
+```
+
+Run (creates a timestamped DB backup first):
+
+```bash
+python backfill_trades.py
+```
+
+Notes:
+- By default it reads `data/trade_journal.csv` and/or `trade_journal.csv` (if present) and scans `logs/`.
+- It is idempotent and will not overwrite existing trades.
+- On EC2, stop the bot/container first to avoid SQLite locks, then run backfill, then restart.
+
+Verify on EC2:
+
+```bash
+python ec2_bot_status.py
+```
 
 ## Project Structure
 
@@ -70,12 +97,11 @@ alphabot/
     data_store.py         — In-memory rolling OHLCV buffer
     models.py             — Candle, Ticker, OrderBook models
   regime/
-    detector.py           — ADX/ATR/BBW regime classifier
+    detector.py           — ADX/ATR/EMA slope regime classifier
   strategies/
     base.py               — Abstract strategy interface
-    ema_crossover.py      — Strategy A: EMA trend following
-    bb_reversion.py       — Strategy B: Bollinger mean reversion
-    atr_breakout.py       — Strategy C: ATR breakout
+    supertrend_rsi.py     — Strategy A: Supertrend + RSI + EMA200
+    ema_adx_volume.py     — Strategy B: EMA 9/21 + ADX + Volume
     signal.py             — Signal model + confidence scoring
     engine.py             — Regime-to-strategy router
   risk/
@@ -97,7 +123,7 @@ alphabot/
     db.py                 — SQLite CRUD helpers
   utils/
     logger.py             — Loguru structured logging
-    indicators.py         — pandas-ta indicator wrappers
+    indicators.py         — Indicator helpers
     retry.py              — Exponential backoff decorator
   tests/
     test_regime.py        — Regime detector tests
@@ -119,6 +145,7 @@ alphabot/
 | `MAX_LEVERAGE` | 5 | Max leverage per position |
 | `MIN_SIGNAL_CONFIDENCE` | 60 | Min confidence score (0-100) |
 | `MIN_RISK_REWARD` | 1.5 | Min R:R to accept a trade |
+| `MIN_NET_RISK_REWARD` | 1.15 | Min net R:R (after fees) to accept a trade |
 
 ### Strategy Parameters (`config.yaml`)
 

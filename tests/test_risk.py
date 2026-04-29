@@ -2,6 +2,7 @@
 import pytest
 from decimal import Decimal
 
+from alphabot.config import settings
 from alphabot.risk.position_sizer import PositionSizer
 from alphabot.risk.risk_manager import RiskManager
 from alphabot.strategies.signal import Signal, SignalDirection
@@ -75,7 +76,8 @@ class TestRiskManager:
 
     def _make_signal(self, confidence=75.0, direction=SignalDirection.LONG,
                      entry=Decimal("100"), sl=Decimal("95"),
-                     tp1=Decimal("110"), tp2=Decimal("115")):
+                     tp1=Decimal("110"), tp2=Decimal("115"),
+                     regime=MarketRegime.TRENDING_UP.value):
         return Signal(
             symbol="BTCUSDT",
             direction=direction,
@@ -85,7 +87,7 @@ class TestRiskManager:
             take_profit_1=tp1,
             take_profit_2=tp2,
             strategy_name="test",
-            regime=MarketRegime.TRENDING_UP.value,
+            regime=regime,
             timeframe="5m",
         )
 
@@ -127,6 +129,141 @@ class TestRiskManager:
         assert approved is False
         assert "r:r" in reason.lower() or "reward" in reason.lower() or "risk" in reason.lower()
 
+    def test_reject_low_net_risk_reward_after_fees(self, manager: RiskManager, monkeypatch):
+        monkeypatch.setattr(settings, "min_stop_distance_pct", Decimal("0"), raising=False)
+        # Gross R:R passes (2.0), but reward is too small after roundtrip fees.
+        signal = self._make_signal(
+            entry=Decimal("100.00"),
+            sl=Decimal("99.98"),
+            tp1=Decimal("100.04"),
+            tp2=Decimal("100.08"),
+        )
+        approved, reason, _ = manager.validate_signal(
+            signal=signal,
+            account_balance=Decimal("10000"),
+            open_positions=[],
+            existing_exposure=Decimal("0"),
+        )
+        assert approved is False
+        assert "net r:r" in reason.lower()
+
+    def test_reject_low_net_risk_reward_threshold(self, manager: RiskManager, monkeypatch):
+        monkeypatch.setattr(settings, "min_net_risk_reward", Decimal("1.4"), raising=False)
+
+        signal = self._make_signal(
+            entry=Decimal("100.00"),
+            sl=Decimal("99.00"),
+            tp1=Decimal("101.50"),
+            tp2=Decimal("102.50"),
+        )
+
+        approved, reason, _ = manager.validate_signal(
+            signal=signal,
+            account_balance=Decimal("10000"),
+            open_positions=[],
+            existing_exposure=Decimal("0"),
+        )
+        assert approved is False
+        assert "net r:r" in reason.lower()
+
+    def test_strategy_specific_min_confidence_allows_lower_threshold(self, manager: RiskManager, monkeypatch):
+        monkeypatch.setattr(settings, "min_signal_confidence", 68, raising=False)
+        monkeypatch.setattr(settings, "liquidity_sweep_orderflow_min_confidence", Decimal("0.45"), raising=False)
+
+        signal = self._make_signal(confidence=50.0)
+        signal.strategy_name = "liquidity_sweep_orderflow"
+
+        approved, reason, _ = manager.validate_signal(
+            signal=signal,
+            account_balance=Decimal("10000"),
+            open_positions=[],
+            existing_exposure=Decimal("0"),
+        )
+        assert approved is True, reason
+
+    def test_reject_tight_stop_distance(self, manager: RiskManager, monkeypatch):
+        monkeypatch.setattr(settings, "min_stop_distance_pct", Decimal("0.5"), raising=False)
+
+        signal = self._make_signal(
+            entry=Decimal("100.00"),
+            sl=Decimal("99.70"),
+            tp1=Decimal("101.50"),
+            tp2=Decimal("102.50"),
+        )
+
+        approved, reason, _ = manager.validate_signal(
+            signal=signal,
+            account_balance=Decimal("10000"),
+            open_positions=[],
+            existing_exposure=Decimal("0"),
+        )
+        assert approved is False
+        assert "tight stop" in reason.lower()
+
+    def test_same_strategy_enters_cooldown_after_consecutive_losses(
+        self, manager: RiskManager, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "max_consecutive_losses", 2, raising=False)
+        monkeypatch.setattr(settings, "consecutive_loss_cooldown_minutes", 30, raising=False)
+
+        manager.record_trade_result(
+            symbol="BTCUSDT",
+            pnl=Decimal("-10"),
+            is_win=False,
+            strategy_name="ema_adx_volume",
+        )
+        manager.record_trade_result(
+            symbol="ETHUSDT",
+            pnl=Decimal("-12"),
+            is_win=False,
+            strategy_name="ema_adx_volume",
+        )
+
+        signal = self._make_signal()
+        signal.strategy_name = "ema_adx_volume"
+
+        approved, reason, _ = manager.validate_signal(
+            signal=signal,
+            account_balance=Decimal("10000"),
+            open_positions=[],
+            existing_exposure=Decimal("0"),
+        )
+
+        assert approved is False
+        assert "cooldown" in reason.lower()
+        assert "ema_adx_volume" in reason.lower()
+
+    def test_strategy_cooldown_does_not_block_other_strategies(
+        self, manager: RiskManager, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "max_consecutive_losses", 2, raising=False)
+        monkeypatch.setattr(settings, "consecutive_loss_cooldown_minutes", 30, raising=False)
+
+        manager.record_trade_result(
+            symbol="BTCUSDT",
+            pnl=Decimal("-10"),
+            is_win=False,
+            strategy_name="ema_adx_volume",
+        )
+        manager.record_trade_result(
+            symbol="ETHUSDT",
+            pnl=Decimal("-12"),
+            is_win=False,
+            strategy_name="ema_adx_volume",
+        )
+
+        signal = self._make_signal()
+        signal.strategy_name = "supertrend_rsi"
+
+        approved, reason, _ = manager.validate_signal(
+            signal=signal,
+            account_balance=Decimal("10000"),
+            open_positions=[],
+            existing_exposure=Decimal("0"),
+        )
+
+        assert approved is True, reason
+
     def test_reject_max_positions(self, manager: RiskManager):
         signal = self._make_signal()
         # Create enough fake open positions to hit the cap
@@ -156,3 +293,17 @@ class TestRiskManager:
         )
         assert approved is False
         assert "correlation" in reason.lower() or "already" in reason.lower() or "block" in reason.lower()
+
+    def test_reject_countertrend_signal_in_trending_regime(self, manager: RiskManager):
+        signal = self._make_signal(
+            direction=SignalDirection.SHORT,
+            regime=MarketRegime.TRENDING_UP.value,
+        )
+        approved, reason, _ = manager.validate_signal(
+            signal=signal,
+            account_balance=Decimal("10000"),
+            open_positions=[],
+            existing_exposure=Decimal("0"),
+        )
+        assert approved is False
+        assert "regime" in reason.lower()

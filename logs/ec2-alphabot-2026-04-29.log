@@ -1,0 +1,66 @@
+# AlphaBot EC2 Container Log — 2026-04-29
+# Container rebuilt at 09:16 UTC (per-strategy cooldown + tight-stop fix deployed)
+# Logs before 09:16 UTC are not available in Docker log buffer (prior container run)
+# Historical trades from all prior sessions are in the SQLite DB
+
+2026-04-29T09:16:37.195793166Z 2026-04-29 09:16:37.195 | INFO     | alphabot.utils.logger:setup_logger:61 | Logger initialized
+2026-04-29T09:16:37.196328588Z 2026-04-29 09:16:37.196 | INFO     | __main__:main:33 | ============================================================
+2026-04-29T09:16:37.196665913Z 2026-04-29 09:16:37.196 | INFO     | __main__:main:34 |    ⚡ AlphaBot — Adaptive Algorithmic Trading System
+2026-04-29T09:16:37.197148964Z 2026-04-29 09:16:37.197 | INFO     | __main__:main:35 |    Environment: TESTNET
+2026-04-29T09:16:37.197429205Z 2026-04-29 09:16:37.197 | INFO     | __main__:main:36 |    Pairs: BTCUSDT, ETHUSDT, SOLUSDT
+2026-04-29T09:16:37.197688257Z 2026-04-29 09:16:37.197 | INFO     | __main__:main:37 |    Timeframe: 15m
+2026-04-29T09:16:37.198039853Z 2026-04-29 09:16:37.197 | INFO     | __main__:main:38 |    Max Leverage: 5x
+2026-04-29T09:16:37.198304745Z 2026-04-29 09:16:37.198 | INFO     | __main__:main:39 |    Risk Per Trade: 0.5%
+2026-04-29T09:16:37.198599643Z 2026-04-29 09:16:37.198 | INFO     | __main__:main:40 | ============================================================
+2026-04-29T09:16:37.591239963Z 2026-04-29 09:16:37.591 | INFO     | __main__:main:45 | Database initialized
+2026-04-29T09:16:38.784085797Z 2026-04-29 09:16:38.783 | INFO     | alphabot.data.timeframe_manager:configure_default_stack:102 | [TFManager] Stack: entry=['15m'] bias=['1h', '4h']
+2026-04-29T09:16:40.811211917Z 2026-04-29 09:16:40.810 | INFO     | alphabot.execution.testnet_client:connect:56 | [Client] Connected to Binance TESTNET
+2026-04-29T09:16:42.629598167Z 2026-04-29 09:16:42.628 | INFO     | __main__:main:116 | Account snapshot (futures): available=$3,368.28 wallet=$3,368.28 margin=$3,368.28 unrealized=$0.00
+2026-04-29T09:16:42.639571210Z 2026-04-29 09:16:42.639 | INFO     | alphabot.risk.risk_manager:initialize:88 | [Risk] Initialized: balance=3368.28284065 peak=3381.64281732
+2026-04-29T09:16:45.165903089Z 2026-04-29 09:16:45.165 | WARNING  | alphabot.data.websocket_client:start:50 | [MarketData] REST fallback enabled — polling every 30s
+2026-04-29T09:16:45.166076727Z 2026-04-29 09:16:45.166 | INFO     | alphabot.data.websocket_client:start:54 | WebSocket client started
+2026-04-29T09:16:45.167523649Z 2026-04-29 09:16:45.167 | INFO     | alphabot.positions.position_manager:start_monitor:191 | [PosManager] Monitor loop started
+2026-04-29T09:16:45.167994021Z 2026-04-29 09:16:45.167 | INFO     | __main__:main:351 | 🚀 AlphaBot is running! Press Ctrl+C to stop.
+2026-04-29T09:16:45.566723664Z 2026-04-29 09:16:45.566 | INFO     | alphabot.data.websocket_client:_run_websocket:213 | WebSocket connected successfully
+2026-04-29T09:30:17.179009997Z 2026-04-29 09:30:17.178 | INFO     | alphabot.regime.detector:detect:74 | Regime change: BTCUSDT None → MarketRegime.TRENDING_UP
+2026-04-29T09:30:17.659459330Z 2026-04-29 09:30:17.659 | INFO     | alphabot.regime.detector:detect:74 | Regime change: ETHUSDT None → MarketRegime.TRENDING_UP
+2026-04-29T09:30:18.138522147Z 2026-04-29 09:30:18.138 | INFO     | alphabot.regime.detector:detect:74 | Regime change: SOLUSDT None → MarketRegime.TRENDING_DOWN
+2026-04-29T09:45:24.764430132Z 2026-04-29 09:45:24.764 | INFO     | alphabot.regime.detector:detect:74 | Regime change: SOLUSDT MarketRegime.TRENDING_DOWN → MarketRegime.TRENDING_UP
+2026-04-29T09:45:24.814780044Z 2026-04-29 09:45:24.814 | INFO     | alphabot.strategies.ema_adx_volume:generate_signal:192 | [ema_adx_volume] SOLUSDT LONG conf=76.2 entry=84.8100 SL=84.5254 TP1=85.2546
+2026-04-29T09:45:24.815400724Z 2026-04-29 09:45:24.815 | INFO     | alphabot.strategies.engine:evaluate:158 | [Engine] SOLUSDT: Signal generated — LONG via ema_adx_volume confidence=76.2 regime=TRENDING_UP candidates=[ema_adx_volume:LONG:76.2]
+2026-04-29T09:45:24.816091235Z 2026-04-29 09:45:24.815 | WARNING  | alphabot.risk.risk_manager:_log_rejection:324 | [Risk] REJECTED: SOLUSDT LONG — LOW NET R:R — 1.07 after fees < 1.15
+2026-04-29T10:15:05.264812247Z 2026-04-29 10:15:05.264 | INFO     | alphabot.strategies.ema_adx_volume:generate_signal:192 | [ema_adx_volume] BTCUSDT LONG conf=82.0 entry=77686.1000 SL=77443.9743 TP1=78064.4214
+2026-04-29T10:15:05.265572489Z 2026-04-29 10:15:05.265 | WARNING  | alphabot.risk.risk_manager:_log_rejection:324 | [Risk] REJECTED: BTCUSDT LONG — LOW NET R:R — 1.04 after fees < 1.15
+2026-04-29T10:15:05.745140901Z 2026-04-29 10:15:05.745 | INFO     | alphabot.strategies.ema_adx_volume:generate_signal:192 | [ema_adx_volume] ETHUSDT LONG conf=86.5 entry=2343.1500 SL=2333.3534 TP1=2358.4571
+2026-04-29T10:15:05.746908548Z 2026-04-29 10:15:05.746 | WARNING  | alphabot.risk.risk_manager:_log_rejection:324 | [Risk] REJECTED: ETHUSDT LONG — TIGHT STOP — 0.42% < 0.5%
+2026-04-29T10:30:11.459618815Z 2026-04-29 10:30:11.459 | INFO     | alphabot.strategies.ema_adx_volume:generate_signal:192 | [ema_adx_volume] BTCUSDT LONG conf=82.3 entry=77847.6000 SL=77596.1486 TP1=78240.4929
+2026-04-29T10:30:11.460520401Z 2026-04-29 10:30:11.460 | WARNING  | alphabot.risk.risk_manager:_log_rejection:324 | [Risk] REJECTED: BTCUSDT LONG — LOW NET R:R — 1.05 after fees < 1.15
+2026-04-29T10:45:18.579599510Z 2026-04-29 10:45:18.579 | INFO     | alphabot.strategies.supertrend_rsi:generate_signal:158 | [supertrend_rsi] ETHUSDT LONG conf=80.5 entry=2331.0000 SL=2319.8194 TP1=2348.4696
+2026-04-29T10:45:18.580906604Z 2026-04-29 10:45:18.580 | WARNING  | alphabot.risk.risk_manager:_log_rejection:324 | [Risk] REJECTED: ETHUSDT LONG — TIGHT STOP — 0.48% < 0.5%
+2026-04-29T11:15:01.561375957Z 2026-04-29 11:15:01.561 | INFO     | alphabot.strategies.supertrend_rsi:generate_signal:158 | [supertrend_rsi] SOLUSDT LONG conf=69.8 entry=85.0000 SL=84.5714 TP1=85.6696
+2026-04-29T11:15:01.562083273Z 2026-04-29 11:15:01.561 | INFO     | alphabot.strategies.engine:evaluate:158 | [Engine] SOLUSDT: Signal generated — LONG via supertrend_rsi confidence=69.8 regime=TRENDING_UP candidates=[supertrend_rsi:LONG:69.8]
+2026-04-29T11:15:01.563796269Z 2026-04-29 11:15:01.563 | INFO     | alphabot.risk.position_sizer:calculate_position_size:136 | [Sizer] Position sized: qty=3.9626 usdt=336.83 risk=$16.84 (0.5%) lev=5x margin=67.37
+2026-04-29T11:15:01.564090151Z 2026-04-29 11:15:01.564 | INFO     | alphabot.risk.risk_manager:validate_signal:237 | [Risk] APPROVED: SOLUSDT LONG conf=69.8 R:R=1.56 net_R:R=1.21 qty=3.9626
+2026-04-29T11:15:01.979876356Z 2026-04-29 11:15:01.979 | INFO     | alphabot.execution.order_executor:place_market_order:59 | [Executor] Market order placed: SOLUSDT BUY qty=3.9626 reduceOnly=False orderId=1860555082
+2026-04-29T11:15:02.350743230Z 2026-04-29 11:15:02.350 | INFO     | alphabot.execution.order_executor:place_stop_market:122 | [Executor] Stop-market order placed: SOLUSDT SELL qty=3.9626 stopPrice=84.57142857 reduceOnly=True orderId=1000000060952472
+2026-04-29T11:15:02.363885357Z 2026-04-29 11:15:02.363 | INFO     | alphabot.positions.position_manager:open_position:273 | [PosManager] Position opened: 3890c265-ac6d-46e6-9cfc-d31a68473c25 SOLUSDT LONG qty=3.9626 entry=85.0 SL=84.57142857 TP1=85.66964286
+2026-04-29T12:00:22.034928078Z 2026-04-29 12:00:22.034 | WARNING  | alphabot.risk.risk_manager:_log_rejection:324 | [Risk] REJECTED: SOLUSDT LONG — CORRELATION BLOCK — already LONG on SOLUSDT
+2026-04-29T12:15:27.307722962Z 2026-04-29 12:15:27.307 | INFO     | alphabot.strategies.supertrend_rsi:generate_signal:158 | [supertrend_rsi] BTCUSDT LONG conf=78.5 entry=77292.8000 SL=76972.6629 TP1=77793.0143
+2026-04-29T12:15:27.308813550Z 2026-04-29 12:15:27.308 | WARNING  | alphabot.risk.risk_manager:_log_rejection:324 | [Risk] REJECTED: BTCUSDT LONG — LOW NET R:R — 1.15 after fees < 1.15
+2026-04-29T12:15:27.730091601Z 2026-04-29 12:15:27.730 | INFO     | alphabot.regime.detector:detect:74 | Regime change: ETHUSDT MarketRegime.TRENDING_UP → MarketRegime.TRENDING_DOWN
+2026-04-29T12:15:28.201319252Z 2026-04-29 12:15:28.201 | INFO     | alphabot.regime.detector:detect:74 | Regime change: SOLUSDT MarketRegime.TRENDING_UP → MarketRegime.TRENDING_DOWN
+2026-04-29T12:15:28.252575788Z 2026-04-29 12:15:28.252 | WARNING  | alphabot.risk.risk_manager:_log_rejection:324 | [Risk] REJECTED: SOLUSDT SHORT — SYMBOL BLOCK — opposite position already open on SOLUSDT
+2026-04-29T12:17:02.229532064Z 2026-04-29 12:17:02.229 | ERROR    | alphabot.execution.order_executor:place_market_order:65 | [Executor] Market order failed: SOLUSDT SELL 3.9626 — binance {"code":-2022,"msg":"ReduceOnly Order is rejected."}
+2026-04-29T12:17:03.570392567Z 2026-04-29 12:17:03.570 | WARNING  | alphabot.utils.retry:wrapper:44 | [RETRY] place_market_order attempt 2/3 failed: binance {"code":-2022,"msg":"ReduceOnly Order is rejected."}. Retrying in 2.0s...
+2026-04-29T12:17:05.911727193Z 2026-04-29 12:17:05.911 | ERROR    | alphabot.utils.retry:wrapper:39 | [RETRY] place_market_order failed after 3 attempts: binance {"code":-2022,"msg":"ReduceOnly Order is rejected."}
+2026-04-29T12:17:05.930540463Z 2026-04-29 12:17:05.930 | WARNING  | alphabot.positions.pnl_tracker:record_trade:163 | [PnL] Trade not inserted (duplicate/unknown) trade_id=3890c265-ac6d-46e6-9cfc-d31a68473c25 (SOLUSDT LONG reason=SL_HIT)
+2026-04-29T12:17:05.937988932Z 2026-04-29 12:17:05.937 | INFO     | alphabot.positions.position_manager:close_position:367 | [PosManager] Position closed: 3890c265-ac6d-46e6-9cfc-d31a68473c25 SOLUSDT reason=SL_HIT PnL=-1.97
+2026-04-29T12:17:06.307602978Z 2026-04-29 12:17:06.307 | INFO     | alphabot.risk.risk_manager:initialize:88 | [Risk] Initialized: balance=3366.35105761 peak=3381.64281732
+2026-04-29T12:17:06.307859661Z 2026-04-29 12:17:06.307 | INFO     | __main__:refresh_balance:139 | Balance refreshed: $3,366.35
+2026-04-29T12:45:08.775691050Z 2026-04-29 12:45:08.775 | INFO     | alphabot.regime.detector:detect:74 | Regime change: BTCUSDT MarketRegime.TRENDING_UP → MarketRegime.TRENDING_DOWN
+2026-04-29T13:00:15.191179240Z 2026-04-29 13:00:15.190 | WARNING  | alphabot.data.websocket_client:_run_rest_fallback:187 | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=77110.00
+2026-04-29T13:15:21.451609591Z 2026-04-29 13:15:21.451 | WARNING  | alphabot.data.websocket_client:_run_rest_fallback:187 | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=77146.10
+2026-04-29T13:30:28.219226307Z 2026-04-29 13:30:28.218 | WARNING  | alphabot.data.websocket_client:_run_rest_fallback:187 | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=76897.70
+2026-04-29T13:45:03.184612874Z 2026-04-29 13:45:03.183 | WARNING  | alphabot.data.websocket_client:_run_rest_fallback:187 | [MarketData] REST fallback synced closed candle: BTCUSDT 15m close=76529.90
+2026-04-29T13:45:04.144163978Z 2026-04-29 13:45:04.143 | WARNING  | alphabot.data.websocket_client:_run_rest_fallback:187 | [MarketData] REST fallback synced closed candle: SOLUSDT 15m close=83.7700
+2026-04-29T13:45:04.475347860Z 2026-04-29 13:45:04.475 | WARNING  | alphabot.data.websocket_client:_run_rest_fallback:195 | [MarketData] REST fallback applied 3 new candles

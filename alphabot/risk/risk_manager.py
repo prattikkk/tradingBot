@@ -50,6 +50,8 @@ class RiskManager:
         self._drawdown_halt: bool = False
         self._consecutive_losses: int = 0
         self._cooldown_until: Optional[datetime.datetime] = None
+        self._consecutive_losses_by_strategy: Dict[str, int] = {}
+        self._cooldown_until_by_strategy: Dict[str, datetime.datetime] = {}
         self._last_trade_time: Dict[str, datetime.datetime] = {}  # When trade CLOSED
         self._last_trade_open_time: Dict[str, datetime.datetime] = {}  # When position OPENED
         self._halted: bool = False
@@ -138,9 +140,15 @@ class RiskManager:
             return False, reason, {}
 
         # ---- Cooldown from consecutive losses ----
-        if self._cooldown_until and datetime.datetime.now(datetime.UTC) < self._cooldown_until:
-            remaining = (self._cooldown_until - datetime.datetime.now(datetime.UTC)).seconds // 60
-            reason = f"COOLDOWN — {remaining} min remaining after {self._consecutive_losses} consecutive losses"
+        cooldown_key = signal.strategy_name or "unknown"
+        cooldown_until = self._cooldown_until_by_strategy.get(cooldown_key)
+        if cooldown_until and datetime.datetime.now(datetime.UTC) < cooldown_until:
+            remaining = (cooldown_until - datetime.datetime.now(datetime.UTC)).seconds // 60
+            losses = self._consecutive_losses_by_strategy.get(cooldown_key, 0)
+            reason = (
+                f"COOLDOWN — {remaining} min remaining after {losses} "
+                f"consecutive losses ({cooldown_key})"
+            )
             self._log_rejection(signal, reason)
             return False, reason, {}
 
@@ -161,9 +169,18 @@ class RiskManager:
                 self._log_rejection(signal, reason)
                 return False, reason, {}
 
+        # ---- Regime-direction alignment ----
+        if not self._is_regime_aligned(signal.regime, signal.direction):
+            reason = (
+                f"REGIME ALIGNMENT BLOCK — {signal.direction.value} conflicts with {signal.regime}"
+            )
+            self._log_rejection(signal, reason)
+            return False, reason, {}
+
         # ---- Minimum signal confidence ----
-        if signal.confidence < settings.min_signal_confidence:
-            reason = f"LOW CONFIDENCE — {signal.confidence:.1f} < {settings.min_signal_confidence}"
+        min_confidence = self._min_confidence_for_signal(signal)
+        if signal.confidence < min_confidence:
+            reason = f"LOW CONFIDENCE — {signal.confidence:.1f} < {min_confidence}"
             self._log_rejection(signal, reason)
             return False, reason, {}
 
@@ -171,6 +188,21 @@ class RiskManager:
         rr = signal.risk_reward_ratio
         if rr < float(settings.min_risk_reward):
             reason = f"LOW R:R — {rr:.2f} < {settings.min_risk_reward}"
+            self._log_rejection(signal, reason)
+            return False, reason, {}
+
+        net_rr = self._net_rr_after_fees(signal)
+        min_net_rr = float(getattr(settings, "min_net_risk_reward", settings.min_risk_reward))
+        if net_rr < min_net_rr:
+            reason = f"LOW NET R:R — {net_rr:.2f} after fees < {min_net_rr}"
+            self._log_rejection(signal, reason)
+            return False, reason, {}
+
+        min_stop_pct = float(getattr(settings, "min_stop_distance_pct", 0.0) or 0.0)
+        if min_stop_pct > 0 and signal.sl_distance_pct < min_stop_pct:
+            reason = (
+                f"TIGHT STOP — {signal.sl_distance_pct:.2f}% < {min_stop_pct}%"
+            )
             self._log_rejection(signal, reason)
             return False, reason, {}
 
@@ -204,7 +236,7 @@ class RiskManager:
         # ---- ALL CHECKS PASSED ----
         logger.info(
             f"[Risk] APPROVED: {signal.symbol} {signal.direction.value} "
-            f"conf={signal.confidence:.1f} R:R={rr:.2f} qty={size_info['quantity']}"
+            f"conf={signal.confidence:.1f} R:R={rr:.2f} net_R:R={net_rr:.2f} qty={size_info['quantity']}"
         )
 
         # Log approved signal
@@ -225,27 +257,38 @@ class RiskManager:
         symbol: str,
         pnl: Decimal,
         is_win: bool,
+        strategy_name: str = "",
         db: Optional[Database] = None,
     ) -> None:
         """Called after each trade closes to update risk state."""
         self._daily_pnl += pnl
         self._last_trade_time[symbol] = datetime.datetime.now(datetime.UTC)
+        strategy_key = strategy_name or "unknown"
 
         # Consecutive losses
         if not is_win:
             self._consecutive_losses += 1
-            if self._consecutive_losses >= settings.max_consecutive_losses:
-                self._cooldown_until = (
+            losses = self._consecutive_losses_by_strategy.get(strategy_key, 0) + 1
+            self._consecutive_losses_by_strategy[strategy_key] = losses
+            if losses >= settings.max_consecutive_losses:
+                cooldown_until = (
                     datetime.datetime.now(datetime.UTC)
                     + datetime.timedelta(minutes=settings.consecutive_loss_cooldown_minutes)
                 )
+                self._cooldown_until_by_strategy[strategy_key] = cooldown_until
+                self._cooldown_until = max(self._cooldown_until or cooldown_until, cooldown_until)
                 logger.warning(
-                    f"[Risk] {self._consecutive_losses} consecutive losses — "
-                    f"cooldown until {self._cooldown_until}"
+                    f"[Risk] {losses} consecutive losses for {strategy_key} — "
+                    f"cooldown until {cooldown_until}"
                 )
         else:
             self._consecutive_losses = 0
-            self._cooldown_until = None
+            self._consecutive_losses_by_strategy[strategy_key] = 0
+            self._cooldown_until_by_strategy.pop(strategy_key, None)
+            if self._cooldown_until_by_strategy:
+                self._cooldown_until = max(self._cooldown_until_by_strategy.values())
+            else:
+                self._cooldown_until = None
 
         # Check daily loss cap
         daily_loss_pct = abs(self._daily_pnl / self._session_start_balance * 100) if self._session_start_balance > 0 else Decimal("0")
@@ -308,6 +351,34 @@ class RiskManager:
         unit = tf[-1].lower()
         value = int(tf[:-1])
         return value * multipliers.get(unit, 60)
+
+    @staticmethod
+    def _net_rr_after_fees(signal: Signal) -> float:
+        entry = float(signal.entry_price)
+        sl_dist = abs(float(signal.entry_price) - float(signal.stop_loss))
+        tp_dist = abs(float(signal.take_profit_1) - float(signal.entry_price))
+        fee_per_unit = entry * float(settings.estimated_roundtrip_fee_rate)
+
+        effective_reward = tp_dist - fee_per_unit
+        effective_risk = sl_dist + fee_per_unit
+
+        if effective_reward <= 0 or effective_risk <= 0:
+            return 0.0
+        return effective_reward / effective_risk
+
+    @staticmethod
+    def _min_confidence_for_signal(signal: Signal) -> float:
+        if signal.strategy_name == "liquidity_sweep_orderflow":
+            return float(settings.liquidity_sweep_orderflow_min_confidence) * 100.0
+        return float(settings.min_signal_confidence)
+
+    @staticmethod
+    def _is_regime_aligned(regime: str, direction: SignalDirection) -> bool:
+        if regime == "TRENDING_UP":
+            return direction == SignalDirection.LONG
+        if regime == "TRENDING_DOWN":
+            return direction == SignalDirection.SHORT
+        return True
 
     def get_status(self) -> dict:
         """Return current risk state for dashboard."""

@@ -7,7 +7,7 @@ Stop-loss is placed IMMEDIATELY after entry order fills.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional, cast
 
 from loguru import logger
 
@@ -40,75 +40,91 @@ class OrderExecutor:
 
     @retry_async(max_retries=3, base_delay=1.0, exceptions=(Exception,))
     async def place_market_order(self, symbol: str, side: str,
-                                  quantity: float) -> Optional[dict]:
+                                  quantity: float, reduce_only: bool = False) -> Optional[dict]:
         """
         Place a market order (guaranteed fill).
         Used for entry orders and emergency closes.
         """
         try:
+            params: dict[str, Any] = {"reduceOnly": True} if reduce_only else {}
+            order_side = "buy" if side.upper() == "BUY" else "sell"
             order = await self.client.exchange.create_order(
                 symbol=symbol,
                 type="market",
-                side=side.lower(),
+                side=order_side,
                 amount=quantity,
+                params=params,
             )
+            order_dict = cast(dict, order)
             logger.info(
                 f"[Executor] Market order placed: {symbol} {side} qty={quantity} "
-                f"orderId={order.get('id', 'N/A')}"
+                f"reduceOnly={reduce_only} orderId={order_dict.get('id', 'N/A')}"
             )
-            return order
+            return order_dict
         except Exception as e:
             logger.error(f"[Executor] Market order failed: {symbol} {side} {quantity} — {e}")
             raise
 
     @retry_async(max_retries=3, base_delay=1.0, exceptions=(Exception,))
     async def place_limit_order(self, symbol: str, side: str,
-                                 quantity: float, price: float) -> Optional[dict]:
+                                 quantity: float, price: float,
+                                 reduce_only: bool = False) -> Optional[dict]:
         """
         Place a GTC limit order (used for TP orders).
         """
         try:
+            params: dict[str, Any] = {"timeInForce": "GTC"}
+            if reduce_only:
+                params["reduceOnly"] = True
+            order_side = "buy" if side.upper() == "BUY" else "sell"
             order = await self.client.exchange.create_order(
                 symbol=symbol,
                 type="limit",
-                side=side.lower(),
+                side=order_side,
                 amount=quantity,
                 price=price,
-                params={"timeInForce": "GTC"},
+                params=params,
             )
+            order_dict = cast(dict, order)
             logger.info(
                 f"[Executor] Limit order placed: {symbol} {side} qty={quantity} "
-                f"price={price} orderId={order.get('id', 'N/A')}"
+                f"price={price} reduceOnly={reduce_only} orderId={order_dict.get('id', 'N/A')}"
             )
-            return order
+            return order_dict
         except Exception as e:
             logger.error(f"[Executor] Limit order failed: {symbol} {side} — {e}")
             raise
 
     @retry_async(max_retries=3, base_delay=1.0, exceptions=(Exception,))
     async def place_stop_market(self, symbol: str, side: str,
-                                 quantity: float, stop_price: float) -> Optional[dict]:
+                                 quantity: float, stop_price: float,
+                                 reduce_only: bool = True) -> Optional[dict]:
         """
         Place a stop-market order (used for SL).
         Executes at market when stop_price is reached.
         """
         try:
+            params: dict[str, Any] = {
+                "stopPrice": stop_price,
+                "workingType": "MARK_PRICE",
+            }
+            if reduce_only:
+                params["reduceOnly"] = True
+            order_side = "buy" if side.upper() == "BUY" else "sell"
             order = await self.client.exchange.create_order(
                 symbol=symbol,
-                type="stop_market",
-                side=side.lower(),
+                type=cast(Any, "stop_market"),
+                side=order_side,
                 amount=quantity,
-                params={
-                    "stopPrice": stop_price,
-                    "closePosition": False,
-                    "workingType": "MARK_PRICE",
-                },
+                params=params,
             )
+            order_dict = cast(dict, order)
             logger.info(
                 f"[Executor] Stop-market order placed: {symbol} {side} "
-                f"qty={quantity} stopPrice={stop_price} orderId={order.get('id', 'N/A')}"
+                f"qty={quantity} stopPrice={stop_price} reduceOnly={reduce_only} "
+                f"orderId={order_dict.get('id', 'N/A')}"
             )
-            return order
+            return order_dict
         except Exception as e:
             logger.error(f"[Executor] Stop-market order failed: {symbol} — {e}")
             raise

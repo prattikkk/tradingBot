@@ -22,6 +22,9 @@ from loguru import logger
 async def main() -> None:
     """Main async entry point — wires all modules and starts the bot."""
 
+    safety_halt: bool = False
+    safety_halt_reason: Optional[str] = None
+
     # ---- 1. Config & Logger ----
     from alphabot.config import settings
     from alphabot.utils.logger import setup_logger
@@ -73,6 +76,33 @@ async def main() -> None:
     from alphabot.execution.testnet_client import BinanceTestnetClient
     client = BinanceTestnetClient()
     await client.connect()
+
+    # ---- Safety: Refuse to trade if exchange has open positions but DB has none ----
+    # If this happens, the bot is blind to unmanaged risk. We keep the dashboard up
+    # but halt new entries until the account is reconciled.
+    try:
+        exchange_positions = await client.get_positions()
+    except Exception as e:
+        logger.warning(f"[Safety] Could not fetch exchange positions: {e}")
+        exchange_positions = []
+
+    try:
+        db_open_positions = db.get_open_positions()
+    except Exception as e:
+        logger.warning(f"[Safety] Could not fetch DB open positions: {e}")
+        db_open_positions = []
+
+    if exchange_positions and not db_open_positions:
+        safety_halt = True
+        safety_halt_reason = "UNTRACKED_EXCHANGE_POSITIONS"
+        logger.critical(
+            "[Safety] Exchange has open positions but DB has none — halting new trades until reconciled"
+        )
+        for p in exchange_positions[:10]:
+            logger.critical(
+                f"[Safety] Untracked position: symbol={p.get('symbol')} side={p.get('side')} "
+                f"contracts={p.get('contracts')} unrealizedPnl={p.get('unrealizedPnl')}"
+            )
 
     # Get initial account snapshot
     account_snapshot: dict = {}
@@ -162,7 +192,9 @@ async def main() -> None:
             })
 
         bot_status = "ACTIVE"
-        if risk_manager.is_halted:
+        if safety_halt:
+            bot_status = "SAFETY_HALT"
+        elif risk_manager.is_halted:
             bot_status = "MAX_DRAWDOWN"
         elif risk_manager.is_daily_halted:
             bot_status = "DAILY_CAP"
@@ -171,6 +203,8 @@ async def main() -> None:
 
         return {
             "bot_status": bot_status,
+            "safety_halt": safety_halt,
+            "safety_halt_reason": safety_halt_reason,
             "uptime": uptime,
             # Match Binance Futures UI semantics as closely as possible.
             # 'balance' stays as availableBalance for sizing, but we also expose wallet/margin/unrealized.
@@ -203,6 +237,8 @@ async def main() -> None:
 
         logger.info(f"--- Entry eval: {symbol} {timeframe} ---")
 
+        if safety_halt:
+            return
         if risk_manager.is_halted or risk_manager.is_daily_halted:
             return
 

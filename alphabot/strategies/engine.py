@@ -15,23 +15,43 @@ from alphabot.config import settings
 from alphabot.data.data_store import DataStore
 from alphabot.regime.detector import MarketRegime, RegimeDetector
 from alphabot.strategies.base import BaseStrategy
+from alphabot.strategies.ema_adx_volume import EmaAdxVolumeStrategy
+from alphabot.strategies.liquidity_sweep_orderflow import LiquiditySweepOrderFlowStrategy
+from alphabot.strategies.orderflow_liquidity_sweep import OrderFlowLiquiditySweepStrategy
 from alphabot.strategies.signal import Signal
-from alphabot.strategies.ema_crossover import EMACrossoverStrategy
-from alphabot.strategies.bb_reversion import BBReversionStrategy
-from alphabot.strategies.atr_breakout import ATRBreakoutStrategy
-from alphabot.strategies.pullback_momentum import PullbackMomentumStrategy
+from alphabot.strategies.supertrend_pullback import SupertrendPullbackStrategy
+from alphabot.strategies.supertrend_rsi import SupertrendRsiStrategy
+from alphabot.strategies.supertrend_trail import SupertrendTrailStrategy
 from alphabot.utils.indicators import compute_all_indicators
 
 
 # Regime → Strategy mapping
 REGIME_STRATEGY_MAP: Dict[MarketRegime, List[type]] = {
-    MarketRegime.TRENDING_UP: [PullbackMomentumStrategy, EMACrossoverStrategy],
-    MarketRegime.TRENDING_DOWN: [PullbackMomentumStrategy, EMACrossoverStrategy],
-    # Balanced option: allow PMC to run in RANGING, but it will self-filter via HTF bias gates.
-    MarketRegime.RANGING: [PullbackMomentumStrategy, BBReversionStrategy],
-    MarketRegime.HIGH_VOLATILITY: [ATRBreakoutStrategy],
+    MarketRegime.TRENDING_UP: [
+        SupertrendTrailStrategy,
+        SupertrendPullbackStrategy,
+        SupertrendRsiStrategy,
+        EmaAdxVolumeStrategy,
+    ],
+    MarketRegime.TRENDING_DOWN: [
+        SupertrendTrailStrategy,
+        SupertrendPullbackStrategy,
+        SupertrendRsiStrategy,
+        EmaAdxVolumeStrategy,
+    ],
+    MarketRegime.RANGING: [
+        LiquiditySweepOrderFlowStrategy,
+        OrderFlowLiquiditySweepStrategy,
+    ],
+    MarketRegime.HIGH_VOLATILITY: [
+        LiquiditySweepOrderFlowStrategy,
+        OrderFlowLiquiditySweepStrategy,
+    ],
     MarketRegime.UNCLEAR: [],  # No trades in unclear regime
 }
+
+SPECIALIZED_TREND_STRATEGIES = {"supertrend_trail", "supertrend_pullback"}
+SPECIALIZED_SELECTION_MARGIN = 3.0
 
 
 class StrategyEngine:
@@ -44,10 +64,12 @@ class StrategyEngine:
         self.data_store = data_store
         self.regime_detector = regime_detector
         self._strategies: Dict[str, BaseStrategy] = {
-            "ema_crossover": EMACrossoverStrategy(),
-            "bb_reversion": BBReversionStrategy(),
-            "atr_breakout": ATRBreakoutStrategy(),
-            "pullback_momentum": PullbackMomentumStrategy(),
+            "supertrend_trail": SupertrendTrailStrategy(),
+            "supertrend_pullback": SupertrendPullbackStrategy(),
+            "supertrend_rsi": SupertrendRsiStrategy(),
+            "ema_adx_volume": EmaAdxVolumeStrategy(),
+            "liquidity_sweep_orderflow": LiquiditySweepOrderFlowStrategy(),
+            "orderflow_liquidity_sweep": OrderFlowLiquiditySweepStrategy(),
         }
 
     def evaluate(
@@ -72,9 +94,8 @@ class StrategyEngine:
             logger.debug(f"[Engine] {symbol}: regime UNCLEAR — no trade")
             return None
 
-        # HIGH_VOLATILITY — ATR breakout only, with caution
         if regime == MarketRegime.HIGH_VOLATILITY:
-            logger.info(f"[Engine] {symbol}: HIGH_VOLATILITY regime — cautious mode")
+            logger.info(f"[Engine] {symbol}: HIGH_VOLATILITY regime — no trades")
 
         # Get strategy classes for this regime
         strategy_classes = REGIME_STRATEGY_MAP.get(regime, [])
@@ -91,11 +112,14 @@ class StrategyEngine:
         indicator_config = {
             "ema_fast": settings.ema_fast,
             "ema_slow": settings.ema_slow,
+            "ema_long": settings.ema_long_period,
             "atr_period": settings.atr_period,
             "adx_period": settings.adx_period,
-            "rsi_period": 14,
-            "bb_period": settings.bb_period,
-            "bb_std": settings.bb_std,
+            "rsi_period": settings.rsi_period,
+            "volume_sma_period": settings.volume_sma_period,
+            "ema_slope_period": settings.ema_slope_period,
+            "supertrend_period": settings.supertrend_period,
+            "supertrend_multiplier": settings.supertrend_multiplier,
         }
         df = compute_all_indicators(df, indicator_config)
 
@@ -107,7 +131,7 @@ class StrategyEngine:
             htf_df = compute_all_indicators(htf_df, indicator_config)
 
         # Run each eligible strategy and pick the strongest signal
-        best_signal: Optional[Signal] = None
+        candidate_signals: List[Signal] = []
         for strategy_cls in strategy_classes:
             strategy_name = strategy_cls.name if hasattr(strategy_cls, 'name') else strategy_cls.__name__
             strategy = self._strategies.get(strategy_name)
@@ -121,19 +145,48 @@ class StrategyEngine:
                 timeframe=tf,
                 higher_tf_df=htf_df,
             )
-            if signal and (best_signal is None or signal.confidence > best_signal.confidence):
-                best_signal = signal
+            if signal:
+                candidate_signals.append(signal)
+
+        best_signal = self._select_best_signal(candidate_signals)
 
         if best_signal:
+            candidate_summary = ", ".join(
+                f"{sig.strategy_name}:{sig.direction.value}:{sig.confidence:.1f}"
+                for sig in sorted(candidate_signals, key=lambda s: s.confidence, reverse=True)
+            )
             logger.info(
                 f"[Engine] {symbol}: Signal generated — "
                 f"{best_signal.direction.value} via {best_signal.strategy_name} "
-                f"confidence={best_signal.confidence:.1f} regime={regime.value}"
+                f"confidence={best_signal.confidence:.1f} regime={regime.value} "
+                f"candidates=[{candidate_summary}]"
             )
         else:
             logger.debug(f"[Engine] {symbol}: no signal generated for regime {regime.value}")
 
         return best_signal
+
+    @staticmethod
+    def _select_best_signal(candidates: List[Signal]) -> Optional[Signal]:
+        if not candidates:
+            return None
+
+        best = max(candidates, key=lambda s: s.confidence)
+        if best.strategy_name != "supertrend_rsi":
+            return best
+
+        specialized = [
+            sig
+            for sig in candidates
+            if sig.strategy_name in SPECIALIZED_TREND_STRATEGIES
+        ]
+        if not specialized:
+            return best
+
+        specialized_best = max(specialized, key=lambda s: s.confidence)
+        if specialized_best.confidence >= (best.confidence - SPECIALIZED_SELECTION_MARGIN):
+            return specialized_best
+        return best
 
     def evaluate_all(self) -> List[Signal]:
         """Evaluate all configured trading pairs and return any signals."""

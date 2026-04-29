@@ -35,6 +35,8 @@ class BinanceWebSocketClient:
         self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self._running = False
         self._reconnect_delay = 1.0
+        self._ws_task: Optional[asyncio.Task] = None
+        self._rest_fallback_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         """Start WebSocket streams and historical data fetch."""
@@ -42,12 +44,25 @@ class BinanceWebSocketClient:
         # Fetch historical candles first
         await self._fetch_all_historical()
         # Then start WebSocket
-        asyncio.create_task(self._run_websocket())
+        self._ws_task = asyncio.create_task(self._run_websocket())
+        if settings.market_data_rest_fallback_enabled:
+            self._rest_fallback_task = asyncio.create_task(self._run_rest_fallback())
+            logger.warning(
+                f"[MarketData] REST fallback enabled — polling every "
+                f"{settings.market_data_poll_interval_seconds}s"
+            )
         logger.info("WebSocket client started")
 
     async def stop(self) -> None:
         """Gracefully close WebSocket connection."""
         self._running = False
+        for task in (self._rest_fallback_task, self._ws_task):
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         if self._ws and not self._ws.closed:
             await self._ws.close()
         if self._ws_session and not self._ws_session.closed:
@@ -75,7 +90,9 @@ class BinanceWebSocketClient:
                 data = await resp.json()
 
         candles = []
+        now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
         for k in data:
+            close_time = datetime.datetime.utcfromtimestamp(k[6] / 1000)
             candle = Candle(
                 symbol=symbol,
                 timeframe=timeframe,
@@ -85,26 +102,24 @@ class BinanceWebSocketClient:
                 low=Decimal(str(k[3])),
                 close=Decimal(str(k[4])),
                 volume=Decimal(str(k[5])),
-                close_time=datetime.datetime.utcfromtimestamp(k[6] / 1000),
-                is_closed=True,
+                close_time=close_time,
+                is_closed=close_time <= now,
             )
             candles.append(candle)
         return candles
 
     async def _fetch_all_historical(self) -> None:
         """Fetch historical data for all configured pairs and timeframes."""
-        timeframes = list({settings.primary_timeframe, *getattr(settings, "entry_timeframes", []), *getattr(settings, "bias_timeframes", [])})
-        # Fallback: ensure 1h is available for confirmation
-        if "1h" not in timeframes and settings.primary_timeframe != "1h":
-            timeframes.append("1h")
+        timeframes = self._configured_timeframes()
 
         for symbol in settings.trading_pairs:
             for tf in timeframes:
                 try:
                     candles = await self._fetch_historical_candles(symbol, tf)
-                    self.data_store.load_historical(symbol, tf, candles)
+                    closed_candles = [c for c in candles if c.is_closed]
+                    self.data_store.load_historical(symbol, tf, closed_candles)
                     logger.info(
-                        f"Loaded {len(candles)} historical {tf} candles for {symbol}"
+                        f"Loaded {len(closed_candles)} historical {tf} candles for {symbol}"
                     )
                 except Exception as e:
                     logger.error(
@@ -125,6 +140,66 @@ class BinanceWebSocketClient:
         stream_path = "/".join(streams)
         return f"wss://fstream.binance.com/stream?streams={stream_path}"
 
+    @staticmethod
+    def _configured_timeframes() -> List[str]:
+        timeframes: List[str] = []
+        for tf in [
+            settings.primary_timeframe,
+            *list(getattr(settings, "entry_timeframes", []) or []),
+            *list(getattr(settings, "bias_timeframes", []) or []),
+        ]:
+            if tf and tf not in timeframes:
+                timeframes.append(tf)
+        if "1h" not in timeframes and settings.primary_timeframe != "1h":
+            timeframes.append("1h")
+        return timeframes
+
+    @staticmethod
+    def _latest_closed_candle(candles: List[Candle]) -> Optional[Candle]:
+        for candle in reversed(candles):
+            if candle.is_closed:
+                return candle
+        return None
+
+    async def _run_rest_fallback(self) -> None:
+        """Poll closed candles from REST so entry evaluation still runs if WebSocket is idle."""
+        interval = int(settings.market_data_poll_interval_seconds)
+        await asyncio.sleep(interval)
+
+        while self._running:
+            try:
+                synced = 0
+                for symbol in settings.trading_pairs:
+                    for timeframe in self._configured_timeframes():
+                        candles = await self._fetch_historical_candles(symbol, timeframe, limit=3)
+                        latest_closed = self._latest_closed_candle(candles)
+                        if latest_closed is None:
+                            continue
+
+                        previous_open_time = self.data_store.latest_open_time(symbol, timeframe)
+                        self.data_store.add_candle(latest_closed)
+                        self.data_store.update_price(symbol, latest_closed.close)
+
+                        if previous_open_time == latest_closed.open_time:
+                            continue
+
+                        synced += 1
+                        logger.warning(
+                            f"[MarketData] REST fallback synced closed candle: "
+                            f"{symbol} {timeframe} close={latest_closed.close}"
+                        )
+                        if self.on_candle_close:
+                            await self.on_candle_close(latest_closed)
+
+                if synced:
+                    logger.warning(f"[MarketData] REST fallback applied {synced} new candles")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"[MarketData] REST fallback error: {e}")
+
+            await asyncio.sleep(interval)
+
     async def _run_websocket(self) -> None:
         """Main WebSocket loop with auto-reconnect."""
         while self._running:
@@ -133,9 +208,7 @@ class BinanceWebSocketClient:
                 logger.info(f"Connecting to WebSocket: {url[:80]}...")
 
                 self._ws_session = aiohttp.ClientSession()
-                self._ws = await self._ws_session.ws_connect(
-                    url, heartbeat=20, timeout=aiohttp.ClientWSTimeout(ws_close=30.0)
-                )
+                self._ws = await self._ws_session.ws_connect(url, heartbeat=20)
                 self._reconnect_delay = 1.0  # reset on successful connect
                 logger.info("WebSocket connected successfully")
 
