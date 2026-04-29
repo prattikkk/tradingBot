@@ -72,6 +72,16 @@ strategies:
     atr_tp2_multiplier: 3.2
     max_reclaim_atr: 1.4
 
+  ema_adx_volume:
+    crossover_only: true        # only fresh EMA crosses; no continuation entries
+    min_net_rr: 1.30            # stricter net R:R than global 1.15
+    adx_min: 25                 # require stronger trend for ema_adx
+    volume_multiplier: 1.3      # require stronger volume surge
+    atr_sl_multiplier: 1.8      # wider stop to reduce noise hits
+    atr_tp1_multiplier: 2.8     # keep R:R ~ 1.55 (2.8/1.8)
+    atr_tp2_multiplier: 4.0
+    max_entry_range_atr: 1.6
+
   liquidity_sweep_orderflow:
     enabled: true
     swing_lookback: 10
@@ -111,7 +121,7 @@ risk:
   high_volatility_risk_reduction: 0.5
   time_stop_hours: 4
   time_stop_progress_pct: 20
-  breakeven_activation_r: 0.8
+  breakeven_activation_r: 1.1
 
 take_profit:
   tp1_r_multiple: 1.0

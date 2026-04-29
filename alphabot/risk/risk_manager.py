@@ -192,7 +192,7 @@ class RiskManager:
             return False, reason, {}
 
         net_rr = self._net_rr_after_fees(signal)
-        min_net_rr = float(getattr(settings, "min_net_risk_reward", settings.min_risk_reward))
+        min_net_rr = self._min_net_rr_for_signal(signal)
         if net_rr < min_net_rr:
             reason = f"LOW NET R:R — {net_rr:.2f} after fees < {min_net_rr}"
             self._log_rejection(signal, reason)
@@ -365,6 +365,13 @@ class RiskManager:
         if effective_reward <= 0 or effective_risk <= 0:
             return 0.0
         return effective_reward / effective_risk
+
+    @staticmethod
+    def _min_net_rr_for_signal(signal: Signal) -> float:
+        """Return the minimum net R:R threshold for this signal's strategy."""
+        if signal.strategy_name == "ema_adx_volume":
+            return float(getattr(settings, "ema_adx_min_net_rr", settings.min_net_risk_reward))
+        return float(getattr(settings, "min_net_risk_reward", settings.min_risk_reward))
 
     @staticmethod
     def _min_confidence_for_signal(signal: Signal) -> float:

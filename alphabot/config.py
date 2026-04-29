@@ -483,6 +483,16 @@ class Settings(BaseSettings):
         ge=Decimal("1.0"),
         le=Decimal("4.0"),
     )
+    ema_adx_crossover_only: bool = Field(
+        default=bool(_yaml_get("strategies", "ema_adx_volume", "crossover_only", default=False))
+    )
+    ema_adx_min_net_rr: Decimal = Field(
+        default=_as_decimal(
+            _yaml_get("strategies", "ema_adx_volume", "min_net_rr", default="1.15"), "1.15"
+        ),
+        ge=Decimal("1.0"),
+        le=Decimal("3.0"),
+    )
 
     # ---- Dashboard ----
     dashboard_host: str = Field(default="0.0.0.0")

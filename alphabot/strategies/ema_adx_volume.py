@@ -68,6 +68,12 @@ class EmaAdxVolumeStrategy(BaseStrategy):
         trend_long = ema_fast_now > ema_slow_now and ema_fast_slope > 0
         trend_short = ema_fast_now < ema_slow_now and ema_fast_slope < 0
 
+        # When crossover_only mode is enabled, only fresh EMA crosses are accepted.
+        # Continuation entries (trend_long / trend_short) are skipped to avoid
+        # entering mid-trend where noise is highest and post-entry edge is weakest.
+        if settings.ema_adx_crossover_only and not (bullish_cross or bearish_cross):
+            return None
+
         if not (bullish_cross or bearish_cross or trend_long or trend_short):
             return None
 
