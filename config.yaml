@@ -77,8 +77,8 @@ strategies:
     min_net_rr: 1.30            # stricter net R:R than global 1.15
     adx_min: 25                 # require stronger trend for ema_adx
     volume_multiplier: 1.3      # require stronger volume surge
-    atr_sl_multiplier: 1.8      # wider stop to reduce noise hits
-    atr_tp1_multiplier: 2.8     # keep R:R ~ 1.55 (2.8/1.8)
+    atr_sl_multiplier: 1.4      # tighten SL so net R:R clears minimum more reliably
+    atr_tp1_multiplier: 2.8     # keep R:R ~ 2.0 (2.8/1.4)
     atr_tp2_multiplier: 4.0
     max_entry_range_atr: 1.6
 
