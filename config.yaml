@@ -113,9 +113,9 @@ risk:
   max_concurrent_positions: 1
   max_leverage: 5
   min_risk_reward: 1.5
-  min_net_risk_reward: 1.15
+  min_net_risk_reward: 1.05
   estimated_roundtrip_fee_rate: 0.001   # 0.05% per side taker = 0.10% roundtrip (was 0.0008)
-  min_stop_distance_pct: 0.5
+  min_stop_distance_pct: 0.3
   max_consecutive_losses: 2
   consecutive_loss_cooldown_minutes: 30
   blocked_strategy_directions:
@@ -136,4 +136,4 @@ take_profit:
 
 cooldown:
   min_candles_between_trades: 3
-  stale_order_minutes: 30
+  stale_order_minutes: 240

@@ -329,3 +329,49 @@ async def test_tp1_resyncs_protective_stop_order():
         stop_price=100.1,
         reduce_only=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_close_position_reconciles_reduceonly_rejection():
+    order_executor = Mock()
+    order_executor.place_market_order = AsyncMock(
+        side_effect=Exception('binance {"code":-2022,"msg":"ReduceOnly Order is rejected."}')
+    )
+    order_executor.cancel_all_orders = AsyncMock(return_value=None)
+
+    db = Mock()
+    risk_manager = Mock()
+    pnl_tracker = Mock()
+
+    manager = PositionManager(
+        data_store=Mock(),
+        database=db,
+        risk_manager=risk_manager,
+        pnl_tracker=pnl_tracker,
+        order_executor=order_executor,
+    )
+
+    pos = Position(
+        position_id="p-reduceonly",
+        symbol="SOLUSDT",
+        direction="LONG",
+        quantity=Decimal("2"),
+        entry_price=Decimal("100"),
+        leverage=5,
+        sl_price=Decimal("95"),
+        tp1_price=Decimal("110"),
+        tp2_price=Decimal("120"),
+        strategy_name="unit",
+        regime="TRENDING_UP",
+        signal_confidence=80.0,
+        size_usdt=Decimal("200"),
+    )
+    manager._positions[pos.id] = pos
+
+    await manager.close_position(pos.id, "SL_HIT", Decimal("95"))
+
+    assert pos.status == "CLOSED"
+    assert pos.remaining_qty == Decimal("0")
+    order_executor.cancel_all_orders.assert_awaited_with("SOLUSDT")
+    risk_manager.record_trade_result.assert_called_once()
+    pnl_tracker.record_trade.assert_called_once()

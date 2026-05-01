@@ -242,6 +242,28 @@ async def main() -> None:
         if risk_manager.is_halted or risk_manager.is_daily_halted:
             return
 
+        # If regime flips against an already-open position, flatten first and
+        # skip opening a new trade on the same candle.
+        current_regime = regime_detector.detect(symbol, timeframe)
+        current_regime_value = getattr(current_regime, "value", str(current_regime))
+        for pos in list(position_manager.open_positions):
+            if pos.symbol != symbol:
+                continue
+
+            regime_conflict = (
+                (pos.direction == "LONG" and current_regime_value == "TRENDING_DOWN")
+                or (pos.direction == "SHORT" and current_regime_value == "TRENDING_UP")
+            )
+            if not regime_conflict:
+                continue
+
+            logger.warning(
+                f"[Main] Regime flip: closing {symbol} {pos.direction} position {pos.id} "
+                f"against {current_regime_value}"
+            )
+            await position_manager.close_position(pos.id, "REGIME_FLIP")
+            return
+
         bias_tf = tf_manager.get_bias_timeframe(timeframe)
         signal = strategy_engine.evaluate(symbol, timeframe, bias_timeframe=bias_tf)
         if signal is None:
@@ -321,6 +343,7 @@ async def main() -> None:
                         if pos.symbol == symbol:
                             protected.extend(getattr(pos, "tp_order_ids", []))
                             protected.extend(getattr(pos, "sl_order_ids", []))
+                            protected.extend(getattr(pos, "order_ids", []))
 
                     await order_executor.cleanup_stale_orders(
                         symbol,

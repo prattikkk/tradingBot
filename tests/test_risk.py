@@ -148,6 +148,7 @@ class TestRiskManager:
         assert "net r:r" in reason.lower()
 
     def test_reject_low_net_risk_reward_threshold(self, manager: RiskManager, monkeypatch):
+        monkeypatch.setattr(settings, "min_risk_reward", Decimal("1.2"), raising=False)
         monkeypatch.setattr(settings, "min_net_risk_reward", Decimal("1.4"), raising=False)
 
         signal = self._make_signal(
@@ -280,7 +281,8 @@ class TestRiskManager:
         assert approved is False
         assert "position" in reason.lower()
 
-    def test_reject_duplicate_symbol(self, manager: RiskManager):
+    def test_reject_duplicate_symbol(self, manager: RiskManager, monkeypatch):
+        monkeypatch.setattr(settings, "max_concurrent_positions", 5, raising=False)
         signal = self._make_signal()
         open_positions = [
             {"symbol": "BTCUSDT", "direction": "LONG", "status": "OPEN"}

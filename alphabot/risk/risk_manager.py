@@ -378,7 +378,9 @@ class RiskManager:
     def _min_net_rr_for_signal(signal: Signal) -> float:
         """Return the minimum net R:R threshold for this signal's strategy."""
         if signal.strategy_name == "ema_adx_volume":
-            return float(getattr(settings, "ema_adx_min_net_rr", settings.min_net_risk_reward))
+            return float(getattr(settings, "ema_adx_min_net_rr", 1.05))
+        if signal.strategy_name in ("supertrend_rsi", "supertrend_pullback", "supertrend_trail"):
+            return 1.10
         return float(getattr(settings, "min_net_risk_reward", settings.min_risk_reward))
 
     @staticmethod

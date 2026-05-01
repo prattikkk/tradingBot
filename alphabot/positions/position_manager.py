@@ -303,35 +303,64 @@ class PositionManager:
         if not pos or pos.status == "CLOSED":
             return
 
+        previous_status = pos.status
         price = exit_price or pos.current_price
-        pos.current_price = price
+        final_exit_price = price
+        pos.current_price = final_exit_price
         pos.status = "CLOSED"
         pos.closed_at = datetime.datetime.now(datetime.UTC)
         pos.close_reason = reason
 
-        # Realize remaining quantity using unlevered contract PnL.
-        # Quantity already represents notional exposure; multiplying by leverage double-counts risk.
         close_qty = pos.remaining_qty if pos.remaining_qty > 0 else Decimal("0")
-        if close_qty > 0:
-            self._record_realized_component(pos, close_qty, price)
-            pos.remaining_qty = Decimal("0")
-
-        net_pnl = pos.realized_pnl - pos.fees_paid
+        close_confirmed = self.order_executor is None or close_qty <= 0
 
         # Close via executor
         if self.order_executor and close_qty > 0:
             try:
                 close_side = "SELL" if pos.direction == "LONG" else "BUY"
-                await self.order_executor.place_market_order(
+                close_order = await self.order_executor.place_market_order(
                     symbol=pos.symbol,
                     side=close_side,
                     quantity=float(close_qty),
                     reduce_only=True,
                 )
+                exchange_exit = self._extract_order_fill_price(close_order)
+                if exchange_exit is not None:
+                    final_exit_price = exchange_exit
+                    pos.current_price = exchange_exit
+                close_confirmed = True
                 # Cancel any outstanding orders for this position
                 await self.order_executor.cancel_all_orders(pos.symbol)
             except Exception as e:
-                logger.error(f"[PosManager] Error closing position {position_id}: {e}")
+                err_str = str(e)
+                err_str_lower = err_str.lower()
+                if "-2022" in err_str or "reduceonly" in err_str_lower:
+                    # Exchange stop/close likely filled first. Reconcile locally instead of
+                    # retrying a second reduce-only close that can never fill.
+                    close_confirmed = True
+                    logger.warning(
+                        f"[PosManager] {position_id}: ReduceOnly rejected while closing "
+                        f"{pos.symbol}; position likely already closed on exchange, reconciling"
+                    )
+                    try:
+                        await self.order_executor.cancel_all_orders(pos.symbol)
+                    except Exception:
+                        pass
+                else:
+                    # Non-recoverable close error: keep position open locally.
+                    pos.status = previous_status
+                    pos.closed_at = None
+                    pos.close_reason = None
+                    logger.error(f"[PosManager] Error closing position {position_id}: {e}")
+                    return
+
+        if close_qty > 0 and close_confirmed:
+            # Realize remaining quantity using unlevered contract PnL.
+            # Quantity already represents notional exposure; multiplying by leverage double-counts risk.
+            self._record_realized_component(pos, close_qty, final_exit_price)
+            pos.remaining_qty = Decimal("0")
+
+        net_pnl = pos.realized_pnl - pos.fees_paid
 
         # Persist CLOSED position early so crash/restart recovery can't re-record trades.
         try:
@@ -745,6 +774,22 @@ class PositionManager:
         fee_component = self._estimate_fee_component(pos, close_qty)
         pos.realized_pnl += gross_component
         pos.fees_paid += fee_component
+
+    @staticmethod
+    def _extract_order_fill_price(order: Optional[dict]) -> Optional[Decimal]:
+        if not order:
+            return None
+        for key in ("avgPrice", "average", "price"):
+            value = order.get(key)
+            if value in (None, "", 0, "0", "0.0"):
+                continue
+            try:
+                dec = Decimal(str(value))
+                if dec > 0:
+                    return dec
+            except Exception:
+                continue
+        return None
 
     @staticmethod
     def _effective_exit_price(

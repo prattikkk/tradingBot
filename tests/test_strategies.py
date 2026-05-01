@@ -21,6 +21,14 @@ from alphabot.utils.indicators import adx
 # Helpers
 # ---------------------------------------------------------------------------
 
+
+@pytest.fixture(autouse=True)
+def _strategy_test_thresholds(monkeypatch):
+    # Keep signal-generation tests stable even if environment-level risk knobs
+    # are tightened for live trading.
+    monkeypatch.setattr(settings, "min_signal_confidence", 68, raising=False)
+    monkeypatch.setattr(settings, "min_risk_reward", Decimal("1.5"), raising=False)
+
 def _make_df(n: int = 100, base: float = 100.0, trend: float = 0.0,
              vol_factor: float = 1.0) -> pd.DataFrame:
     """Generate synthetic OHLCV DataFrame."""
