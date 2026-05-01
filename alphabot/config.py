@@ -153,6 +153,9 @@ class Settings(BaseSettings):
         ge=Decimal("0.0"),
         le=Decimal("5.0"),
     )
+    blocked_strategy_directions: List[str] = Field(
+        default=_as_str_list(_yaml_get("risk", "blocked_strategy_directions", default=None), [])
+    )
 
     # ---- Position Management ----
     trailing_stop_activation_r: Decimal = Field(default=Decimal("1.0"), ge=Decimal("0.5"), le=Decimal("2.0"))

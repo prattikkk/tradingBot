@@ -108,7 +108,7 @@ signal_scoring:
 risk:
   risk_per_trade_pct: 0.5
   max_risk_per_trade_pct: 2.0
-  daily_loss_cap_pct: 2.0
+  daily_loss_cap_pct: 1.0
   max_drawdown_pct: 5.0
   max_concurrent_positions: 1
   max_leverage: 5
@@ -116,8 +116,12 @@ risk:
   min_net_risk_reward: 1.15
   estimated_roundtrip_fee_rate: 0.001   # 0.05% per side taker = 0.10% roundtrip (was 0.0008)
   min_stop_distance_pct: 0.5
-  max_consecutive_losses: 3
+  max_consecutive_losses: 2
   consecutive_loss_cooldown_minutes: 30
+  blocked_strategy_directions:
+    - "supertrend_rsi:SHORT"
+    - "liquidity_sweep_orderflow:SHORT"
+    - "ema_adx_volume"
   high_volatility_risk_reduction: 0.5
   time_stop_hours: 4
   time_stop_progress_pct: 20

@@ -307,3 +307,27 @@ class TestRiskManager:
         )
         assert approved is False
         assert "regime" in reason.lower()
+
+    def test_reject_blocked_strategy_direction(self, manager: RiskManager, monkeypatch):
+        monkeypatch.setattr(
+            settings,
+            "blocked_strategy_directions",
+            ["supertrend_rsi:SHORT"],
+            raising=False,
+        )
+
+        signal = self._make_signal(
+            direction=SignalDirection.SHORT,
+            regime=MarketRegime.TRENDING_DOWN.value,
+        )
+        signal.strategy_name = "supertrend_rsi"
+
+        approved, reason, _ = manager.validate_signal(
+            signal=signal,
+            account_balance=Decimal("10000"),
+            open_positions=[],
+            existing_exposure=Decimal("0"),
+        )
+
+        assert approved is False
+        assert "blocklist" in reason.lower()

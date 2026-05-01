@@ -177,6 +177,14 @@ class RiskManager:
             self._log_rejection(signal, reason)
             return False, reason, {}
 
+        # ---- Strategy-direction hard blocklist ----
+        if self._is_strategy_direction_blocked(signal):
+            reason = (
+                f"STRATEGY BLOCKLIST — {signal.strategy_name}:{signal.direction.value} disabled"
+            )
+            self._log_rejection(signal, reason)
+            return False, reason, {}
+
         # ---- Minimum signal confidence ----
         min_confidence = self._min_confidence_for_signal(signal)
         if signal.confidence < min_confidence:
@@ -386,6 +394,33 @@ class RiskManager:
         if regime == "TRENDING_DOWN":
             return direction == SignalDirection.SHORT
         return True
+
+    @staticmethod
+    def _is_strategy_direction_blocked(signal: Signal) -> bool:
+        blocked = getattr(settings, "blocked_strategy_directions", []) or []
+        strategy = (signal.strategy_name or "").strip().lower()
+        direction = signal.direction.value.upper()
+        if not strategy:
+            return False
+
+        for item in blocked:
+            token = str(item).strip()
+            if not token:
+                continue
+
+            if ":" in token:
+                blocked_strategy, blocked_direction = token.split(":", 1)
+                if (
+                    blocked_strategy.strip().lower() == strategy
+                    and blocked_direction.strip().upper() == direction
+                ):
+                    return True
+            else:
+                # Strategy-only token blocks both LONG/SHORT.
+                if token.lower() == strategy:
+                    return True
+
+        return False
 
     def get_status(self) -> dict:
         """Return current risk state for dashboard."""
