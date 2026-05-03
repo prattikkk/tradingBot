@@ -23,6 +23,10 @@ multi_timeframe:
   bias_timeframes:
     - "1h"         # Trend filter
     - "4h"         # Macro context (optional)
+  max_htf_staleness_bars: 2.5   # FIX[5]: reject stale HTF confirmation frames
+
+execution:
+  order_fill_timeout_seconds: 6.0   # FIX[1]: wait window before persisting a new position
 
 market_data:
   rest_fallback_enabled: true
@@ -120,7 +124,6 @@ risk:
   consecutive_loss_cooldown_minutes: 30
   blocked_strategy_directions:
     - "supertrend_rsi:SHORT"
-    - "liquidity_sweep_orderflow:SHORT"
     - "ema_adx_volume"
   high_volatility_risk_reduction: 0.5
   time_stop_hours: 4

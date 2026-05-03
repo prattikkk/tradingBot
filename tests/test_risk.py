@@ -129,6 +129,28 @@ class TestRiskManager:
         assert approved is False
         assert "r:r" in reason.lower() or "reward" in reason.lower() or "risk" in reason.lower()
 
+    def test_accept_rr_at_threshold_with_float_precision_noise(self, manager: RiskManager, monkeypatch):
+        # 101.6/99.0 around entry 100 can produce 1.599999999... as float; do not reject.
+        monkeypatch.setattr(settings, "min_risk_reward", Decimal("1.6"), raising=False)
+        monkeypatch.setattr(settings, "min_net_risk_reward", Decimal("1.0"), raising=False)
+        monkeypatch.setattr(settings, "estimated_roundtrip_fee_rate", Decimal("0.001"), raising=False)
+
+        signal = self._make_signal(
+            entry=Decimal("100"),
+            sl=Decimal("99"),
+            tp1=Decimal("101.6"),
+            tp2=Decimal("103.2"),
+        )
+
+        approved, reason, _ = manager.validate_signal(
+            signal=signal,
+            account_balance=Decimal("10000"),
+            open_positions=[],
+            existing_exposure=Decimal("0"),
+        )
+
+        assert approved is True, reason
+
     def test_reject_low_net_risk_reward_after_fees(self, manager: RiskManager, monkeypatch):
         monkeypatch.setattr(settings, "min_stop_distance_pct", Decimal("0"), raising=False)
         # Gross R:R passes (2.0), but reward is too small after roundtrip fees.
@@ -181,6 +203,53 @@ class TestRiskManager:
             existing_exposure=Decimal("0"),
         )
         assert approved is True, reason
+
+    def test_strategy_specific_min_confidence_accepts_ratio_scale_signal(
+        self, manager: RiskManager, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "min_signal_confidence", 68, raising=False)
+        monkeypatch.setattr(settings, "liquidity_sweep_orderflow_min_confidence", Decimal("0.45"), raising=False)
+
+        signal = self._make_signal(confidence=0.70)
+        signal.strategy_name = "liquidity_sweep_orderflow"
+
+        approved, reason, _ = manager.validate_signal(
+            signal=signal,
+            account_balance=Decimal("10000"),
+            open_positions=[],
+            existing_exposure=Decimal("0"),
+        )
+        assert approved is True, reason
+
+    @pytest.mark.parametrize(
+        ("raw_confidence", "expected_approved"),
+        [
+            (0.75, True),
+            (75.0, True),
+            (0.40, False),
+        ],
+    )
+    def test_confidence_normalization_handles_ratio_and_percent_scales(
+        self,
+        manager: RiskManager,
+        monkeypatch,
+        raw_confidence: float,
+        expected_approved: bool,
+    ):
+        # FIX[6]: Risk gate must evaluate both 0-1 and 0-100 confidence scales consistently.
+        monkeypatch.setattr(settings, "min_signal_confidence", 60, raising=False)
+        signal = self._make_signal(confidence=raw_confidence)
+
+        approved, reason, _ = manager.validate_signal(
+            signal=signal,
+            account_balance=Decimal("10000"),
+            open_positions=[],
+            existing_exposure=Decimal("0"),
+        )
+
+        assert approved is expected_approved
+        if not expected_approved:
+            assert "confidence" in reason.lower()
 
     def test_reject_tight_stop_distance(self, manager: RiskManager, monkeypatch):
         monkeypatch.setattr(settings, "min_stop_distance_pct", Decimal("0.5"), raising=False)

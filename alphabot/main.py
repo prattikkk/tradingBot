@@ -26,7 +26,11 @@ async def main() -> None:
     safety_halt_reason: Optional[str] = None
 
     # ---- 1. Config & Logger ----
-    from alphabot.config import settings
+    from alphabot.config import (
+        settings,
+        detect_env_yaml_overrides,
+        get_effective_config_snapshot,
+    )
     from alphabot.utils.logger import setup_logger
     setup_logger()
 
@@ -38,6 +42,12 @@ async def main() -> None:
     logger.info(f"   Max Leverage: {settings.max_leverage}x")
     logger.info(f"   Risk Per Trade: {settings.risk_per_trade_pct}%")
     logger.info("=" * 60)
+
+    # FIX[7]: Runtime config visibility prevents silent YAML/.env mismatch.
+    cfg_snapshot = get_effective_config_snapshot()
+    logger.info(f"[Config] Effective: {cfg_snapshot}")
+    for warning_msg in detect_env_yaml_overrides():
+        logger.warning(f"[Config] {warning_msg}")
 
     # ---- 2. Database ----
     from alphabot.database.db import Database
@@ -283,10 +293,12 @@ async def main() -> None:
             logger.info(f"Signal rejected for {symbol}: {reason}")
             return
 
-        pos = await position_manager.open_position(signal, size_info)
-        if pos:
-            logger.info(f"Position opened: {pos.id} {pos.symbol} {pos.direction}")
-            risk_manager.record_trade_opened(pos.symbol)
+        opened_pos = await position_manager.open_position(signal, size_info)
+        if opened_pos:
+            logger.info(
+                f"Position opened: {opened_pos.id} {opened_pos.symbol} {opened_pos.direction}"
+            )
+            risk_manager.record_trade_opened(opened_pos.symbol)
 
     tf_manager.register_callback(on_entry_signal_ready)
 

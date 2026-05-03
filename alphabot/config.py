@@ -9,7 +9,7 @@ from __future__ import annotations
 import yaml
 from decimal import Decimal
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List, Tuple
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
@@ -30,9 +30,9 @@ def _load_yaml_config() -> dict:
 _YAML = _load_yaml_config()
 
 
-def _yaml_get(*keys: str, default=None):
+def _yaml_get(*keys: str, default: Any = None) -> Any:
     """Safely fetch nested values from config.yaml."""
-    node = _YAML
+    node: Any = _YAML
     for key in keys:
         if not isinstance(node, dict):
             return default
@@ -45,6 +45,13 @@ def _yaml_get(*keys: str, default=None):
 def _as_int(value, fallback: int) -> int:
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _as_float(value, fallback: float) -> float:
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return fallback
 
@@ -66,6 +73,29 @@ def _as_str_list(value, fallback: List[str]) -> List[str]:
         items = [p for p in parts if p]
         return items or fallback
     return fallback
+
+
+def _read_env_file_pairs() -> Dict[str, str]:
+    """Read KEY=VALUE pairs from .env without exporting them to process env."""
+    env_path = _BASE_DIR / ".env"
+    if not env_path.exists():
+        return {}
+
+    result: Dict[str, str] = {}
+    try:
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+            result[key] = value.strip().strip('"').strip("'")
+    except Exception:
+        return {}
+
+    return result
 
 
 class Settings(BaseSettings):
@@ -96,6 +126,12 @@ class Settings(BaseSettings):
     bias_timeframes: List[str] = Field(
         default=_as_str_list(_yaml_get("multi_timeframe", "bias_timeframes", default=None), ["1h", "4h"])
     )
+    # FIX[5]: Bound HTF freshness gate in units of bars to prevent stale bias alignment.
+    max_htf_staleness_bars: float = Field(
+        default=_as_float(_yaml_get("multi_timeframe", "max_htf_staleness_bars", default=2.5), 2.5),
+        ge=1.0,
+        le=10.0,
+    )
 
     # ---- Risk Parameters ----
     risk_per_trade_pct: Decimal = Field(
@@ -125,6 +161,10 @@ class Settings(BaseSettings):
         default=_as_int(_yaml_get("risk", "max_leverage", default=5), 5),
         ge=1,
         le=20,
+    )
+    margin_mode: str = Field(
+        default=str(_yaml_get("risk", "margin_mode", default="isolated") or "isolated").lower(),
+        pattern=r"^(isolated|cross)$",
     )
     min_signal_confidence: int = Field(
         default=_as_int(_yaml_get("signal_scoring", "min_confidence", default=68), 68),
@@ -167,8 +207,9 @@ class Settings(BaseSettings):
 
     # ---- Indicator Parameters ----
     rsi_period: int = Field(
+        # FIX[8]: Enforce RSI period floor at 14 to avoid unstable/noisy signal generation.
         default=_as_int(_yaml_get("indicators", "rsi_period", default=14), 14),
-        ge=5,
+        ge=14,
         le=50,
     )
     volume_sma_period: int = Field(
@@ -566,6 +607,12 @@ class Settings(BaseSettings):
     stale_order_minutes: int = Field(
         default=_as_int(_yaml_get("cooldown", "stale_order_minutes", default=30), 30)
     )
+    # FIX[1]: Timeout used for exchange fill confirmation before position registration.
+    order_fill_timeout_seconds: float = Field(
+        default=_as_float(_yaml_get("execution", "order_fill_timeout_seconds", default=6.0), 6.0),
+        ge=1.0,
+        le=30.0,
+    )
 
     @field_validator("trading_pairs", mode="before")
     @classmethod
@@ -617,3 +664,79 @@ class Settings(BaseSettings):
 
 # Singleton settings instance — import this everywhere
 settings = Settings()
+
+
+_ENV_AUDIT_MAP: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+    "PRIMARY_TIMEFRAME": ("primary_timeframe", ("primary_timeframe",)),
+    "RISK_PER_TRADE_PCT": ("risk_per_trade_pct", ("risk", "risk_per_trade_pct")),
+    "MAX_RISK_PER_TRADE_PCT": ("max_risk_per_trade_pct", ("risk", "max_risk_per_trade_pct")),
+    "DAILY_LOSS_CAP_PCT": ("daily_loss_cap_pct", ("risk", "daily_loss_cap_pct")),
+    "MAX_DRAWDOWN_PCT": ("max_drawdown_pct", ("risk", "max_drawdown_pct")),
+    "MAX_CONCURRENT_POSITIONS": ("max_concurrent_positions", ("risk", "max_concurrent_positions")),
+    "MAX_LEVERAGE": ("max_leverage", ("risk", "max_leverage")),
+    "MIN_SIGNAL_CONFIDENCE": ("min_signal_confidence", ("signal_scoring", "min_confidence")),
+    "MIN_RISK_REWARD": ("min_risk_reward", ("risk", "min_risk_reward")),
+    "MIN_NET_RISK_REWARD": ("min_net_risk_reward", ("risk", "min_net_risk_reward")),
+    "MIN_STOP_DISTANCE_PCT": ("min_stop_distance_pct", ("risk", "min_stop_distance_pct")),
+    "STALE_ORDER_MINUTES": ("stale_order_minutes", ("cooldown", "stale_order_minutes")),
+}
+
+
+def get_effective_config_snapshot() -> Dict[str, object]:
+    """Small runtime snapshot for startup logging and forensic verification."""
+    return {
+        "environment": settings.environment,
+        "trading_pairs": list(settings.trading_pairs),
+        "primary_timeframe": settings.primary_timeframe,
+        "entry_timeframes": list(settings.entry_timeframes),
+        "bias_timeframes": list(settings.bias_timeframes),
+        "max_htf_staleness_bars": settings.max_htf_staleness_bars,
+        "risk_per_trade_pct": str(settings.risk_per_trade_pct),
+        "max_concurrent_positions": settings.max_concurrent_positions,
+        "max_leverage": settings.max_leverage,
+        "margin_mode": settings.margin_mode,
+        "order_fill_timeout_seconds": settings.order_fill_timeout_seconds,
+        "min_signal_confidence": settings.min_signal_confidence,
+        "min_risk_reward": str(settings.min_risk_reward),
+        "min_net_risk_reward": str(settings.min_net_risk_reward),
+        "estimated_roundtrip_fee_rate": str(settings.estimated_roundtrip_fee_rate),
+        "min_stop_distance_pct": str(settings.min_stop_distance_pct),
+        "stale_order_minutes": settings.stale_order_minutes,
+    }
+
+
+def detect_env_yaml_overrides() -> List[str]:
+    """Return human-readable warnings when .env overrides YAML values."""
+    warnings: List[str] = []
+    env_pairs = _read_env_file_pairs()
+
+    for env_key, (attr_name, yaml_path) in _ENV_AUDIT_MAP.items():
+        env_value = env_pairs.get(env_key)
+        if env_value is None or env_value == "":
+            continue
+
+        yaml_value = _yaml_get(*yaml_path, default=None)
+        if yaml_value is None:
+            continue
+
+        yaml_text = str(yaml_value).strip()
+        env_text = str(env_value).strip()
+        if yaml_text != env_text:
+            effective = getattr(settings, attr_name, None)
+            warnings.append(
+                f".env override active: {env_key}={env_text} (yaml={yaml_text}, effective={effective})"
+            )
+
+    # FIX[7]: Security tripwire for committed API credentials in .env.
+    for key_name in ("BINANCE_TESTNET_API_KEY", "BINANCE_TESTNET_SECRET"):
+        value = (env_pairs.get(key_name) or "").strip()
+        if not value:
+            continue
+        if value.lower().startswith("your_") or value.lower().startswith("replace_"):
+            continue
+        if len(value) >= 24:
+            warnings.append(
+                f"security warning: {key_name} appears populated in .env; rotate and move secret out of repository"
+            )
+
+    return warnings

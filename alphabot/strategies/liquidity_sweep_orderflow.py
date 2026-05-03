@@ -315,7 +315,8 @@ class LiquiditySweepOrderFlowStrategy(BaseStrategy):
                     ),
                 )
 
-        if bear_sweep and recent_delta < 0 and bias != "bull":
+        # Re-enabled SHORT side with stricter confirmation: require bearish HTF bias.
+        if bear_sweep and recent_delta < 0 and bias == "bear":
             confidence = score_signal(
                 direction="short",
                 wick_pct=bear_wick_pct,

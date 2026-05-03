@@ -1,5 +1,6 @@
 """Regression tests for trade accounting and stop-loss PnL handling."""
 
+import asyncio
 import datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, Mock
@@ -9,8 +10,25 @@ import pytest
 
 from alphabot.config import settings
 from alphabot.database.db import Database
+from alphabot.execution.order_executor import OrderExecutor
 from alphabot.positions.pnl_tracker import PnLTracker
 from alphabot.positions.position_manager import Position, PositionManager
+from alphabot.strategies.signal import Signal, SignalDirection
+
+
+@pytest.mark.parametrize(
+    ("order", "expected"),
+    [
+        ({"id": "111", "orderId": "222"}, "111"),
+        ({"orderId": "222"}, "222"),
+        ({"info": {"orderId": "333"}}, "333"),
+        ({"info": {"id": "444"}}, "444"),
+        ({}, ""),
+    ],
+)
+def test_extract_order_id_normalizes_ccxt_schemas(order, expected):
+    # FIX[2]: Ensure order-id extraction is stable across ccxt/Binance field variants.
+    assert OrderExecutor._extract_order_id(order) == expected
 
 
 def test_pnl_tracker_does_not_multiply_by_leverage(tmp_path):
@@ -338,6 +356,8 @@ async def test_close_position_reconciles_reduceonly_rejection():
         side_effect=Exception('binance {"code":-2022,"msg":"ReduceOnly Order is rejected."}')
     )
     order_executor.cancel_all_orders = AsyncMock(return_value=None)
+    order_executor.get_order = AsyncMock(return_value={"avgPrice": "94.5"})
+    order_executor.get_my_trades = AsyncMock(return_value=[])
 
     db = Mock()
     risk_manager = Mock()
@@ -366,12 +386,208 @@ async def test_close_position_reconciles_reduceonly_rejection():
         signal_confidence=80.0,
         size_usdt=Decimal("200"),
     )
+    pos.sl_order_ids = ["sl-order-1"]
+    pos.order_ids = ["entry-order-1", "sl-order-1"]
     manager._positions[pos.id] = pos
 
     await manager.close_position(pos.id, "SL_HIT", Decimal("95"))
 
     assert pos.status == "CLOSED"
     assert pos.remaining_qty == Decimal("0")
+    assert pos.current_price == Decimal("94.5")
+    assert pos.realized_pnl == Decimal("-11.0")
     order_executor.cancel_all_orders.assert_awaited_with("SOLUSDT")
+    order_executor.get_order.assert_awaited_with("SOLUSDT", "sl-order-1")
     risk_manager.record_trade_result.assert_called_once()
     pnl_tracker.record_trade.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_open_position_tracks_ccxt_id_fields_for_entry_and_sl():
+    order_executor = Mock()
+    order_executor.set_margin_mode = AsyncMock(return_value=None)
+    order_executor.set_leverage = AsyncMock(return_value=None)
+    order_executor.place_market_order = AsyncMock(return_value={"id": "entry-123", "avgPrice": "100.5"})
+    order_executor.wait_for_order_fill = AsyncMock(return_value={"id": "entry-123", "avgPrice": "100.5"})
+    order_executor.place_stop_market = AsyncMock(return_value={"id": "sl-789"})
+
+    manager = PositionManager(
+        data_store=Mock(),
+        database=Mock(),
+        risk_manager=Mock(),
+        pnl_tracker=Mock(),
+        order_executor=order_executor,
+    )
+
+    signal = Signal(
+        symbol="BTCUSDT",
+        direction=SignalDirection.LONG,
+        confidence=80.0,
+        entry_price=Decimal("100"),
+        stop_loss=Decimal("98"),
+        take_profit_1=Decimal("104"),
+        take_profit_2=Decimal("108"),
+        strategy_name="unit",
+        regime="TRENDING_UP",
+        timeframe="15m",
+    )
+    size_info = {
+        "quantity": Decimal("0.1"),
+        "leverage": 5,
+        "size_usdt": Decimal("10"),
+    }
+
+    pos = await manager.open_position(signal, size_info)
+
+    assert pos is not None
+    assert "entry-123" in pos.order_ids
+    assert "sl-789" in pos.order_ids
+    assert pos.sl_order_ids == ["sl-789"]
+    assert pos.entry_price == Decimal("100.5")
+    order_executor.set_margin_mode.assert_awaited_with("BTCUSDT", settings.margin_mode.upper())
+    order_executor.wait_for_order_fill.assert_awaited_once_with(
+        "BTCUSDT",
+        "entry-123",
+        initial_order={"id": "entry-123", "avgPrice": "100.5"},
+        timeout_seconds=float(getattr(settings, "order_fill_timeout_seconds", 6.0)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_open_position_concurrent_calls_allow_single_create():
+    # FIX[1]: Concurrent opens on the same symbol must resolve to exactly one position.
+    order_executor = Mock()
+    order_executor.set_margin_mode = AsyncMock(return_value=None)
+    order_executor.set_leverage = AsyncMock(return_value=None)
+    order_executor.place_market_order = AsyncMock(
+        return_value={"id": "entry-conc", "avgPrice": "101.0"}
+    )
+
+    async def _wait_fill(symbol, order_id, initial_order=None, timeout_seconds=None):
+        await asyncio.sleep(0.01)
+        return {"id": order_id, "avgPrice": "101.0", "status": "closed"}
+
+    order_executor.wait_for_order_fill = AsyncMock(side_effect=_wait_fill)
+    order_executor.place_stop_market = AsyncMock(return_value={"id": "sl-conc"})
+
+    manager = PositionManager(
+        data_store=Mock(),
+        database=Mock(),
+        risk_manager=Mock(),
+        pnl_tracker=Mock(),
+        order_executor=order_executor,
+    )
+
+    signal = Signal(
+        symbol="BTCUSDT",
+        direction=SignalDirection.LONG,
+        confidence=80.0,
+        entry_price=Decimal("100"),
+        stop_loss=Decimal("98"),
+        take_profit_1=Decimal("104"),
+        take_profit_2=Decimal("108"),
+        strategy_name="unit",
+        regime="TRENDING_UP",
+        timeframe="15m",
+    )
+    size_info = {
+        "quantity": Decimal("0.1"),
+        "leverage": 5,
+        "size_usdt": Decimal("10"),
+    }
+
+    first, second = await asyncio.gather(
+        manager.open_position(signal, size_info),
+        manager.open_position(signal, size_info),
+    )
+
+    opened = [pos for pos in (first, second) if pos is not None]
+    assert len(opened) == 1
+    assert len(manager.open_positions) == 1
+    assert order_executor.place_market_order.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_normalize_quantity_uses_cached_market_metadata():
+    # FIX[3]: load_markets should be cached and not called for every order normalization.
+    class _StubExchange:
+        def __init__(self):
+            self.load_calls = 0
+
+        async def load_markets(self):
+            self.load_calls += 1
+            return {
+                "BTCUSDT": {
+                    "limits": {"amount": {"min": 0.01}},
+                    "precision": {"amount": 3},
+                }
+            }
+
+        def market(self, symbol):
+            return {
+                "limits": {"amount": {"min": 0.01}},
+                "precision": {"amount": 3},
+            }
+
+        def amount_to_precision(self, symbol, quantity):
+            return f"{quantity:.3f}"
+
+    client = Mock()
+    client.exchange = _StubExchange()
+    executor = OrderExecutor(client)
+
+    first = await executor._normalize_quantity("BTCUSDT", 0.12345)
+    second = await executor._normalize_quantity("BTCUSDT", 0.45678)
+
+    assert first == pytest.approx(0.123)
+    assert second == pytest.approx(0.457)
+    assert client.exchange.load_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_open_position_skips_duplicate_symbol_open():
+    manager = PositionManager(
+        data_store=Mock(),
+        database=Mock(),
+        risk_manager=Mock(),
+        pnl_tracker=Mock(),
+        order_executor=None,
+    )
+
+    existing = Position(
+        position_id="existing",
+        symbol="ETHUSDT",
+        direction="LONG",
+        quantity=Decimal("1"),
+        entry_price=Decimal("100"),
+        leverage=3,
+        sl_price=Decimal("95"),
+        tp1_price=Decimal("105"),
+        tp2_price=Decimal("110"),
+        strategy_name="unit",
+        regime="TRENDING_UP",
+        signal_confidence=80.0,
+        size_usdt=Decimal("100"),
+    )
+    manager._positions[existing.id] = existing
+
+    signal = Signal(
+        symbol="ETHUSDT",
+        direction=SignalDirection.LONG,
+        confidence=80.0,
+        entry_price=Decimal("101"),
+        stop_loss=Decimal("99"),
+        take_profit_1=Decimal("105"),
+        take_profit_2=Decimal("108"),
+        strategy_name="unit",
+        regime="TRENDING_UP",
+        timeframe="15m",
+    )
+    size_info = {
+        "quantity": Decimal("0.5"),
+        "leverage": 3,
+        "size_usdt": Decimal("50"),
+    }
+
+    pos = await manager.open_position(signal, size_info)
+    assert pos is None

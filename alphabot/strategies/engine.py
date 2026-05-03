@@ -6,6 +6,7 @@ Produces BUY/SELL/HOLD signals with confidence scoring.
 
 from __future__ import annotations
 
+import datetime
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -123,12 +124,36 @@ class StrategyEngine:
         }
         df = compute_all_indicators(df, indicator_config)
 
-        # Higher timeframe for confirmation
-        htf_df = None
-        htf = bias_timeframe or ("1h" if tf != "1h" else "4h")
-        if htf and self.data_store.has_enough_data(symbol, htf, min_candles=30):
+        # Higher timeframe confirmation frames (strict AND gate across configured bias tfs).
+        bias_timeframes: List[str] = []
+        if bias_timeframe:
+            bias_timeframes.append(bias_timeframe)
+        for tf_name in list(getattr(settings, "bias_timeframes", []) or []):
+            if tf_name and tf_name not in bias_timeframes and tf_name != tf:
+                bias_timeframes.append(tf_name)
+        if not bias_timeframes:
+            bias_timeframes = ["1h" if tf != "1h" else "4h"]
+
+        htf_frames: Dict[str, pd.DataFrame] = {}
+        for htf in bias_timeframes:
+            if not self.data_store.has_enough_data(symbol, htf, min_candles=30):
+                continue
             htf_df = self.data_store.get_dataframe(symbol, htf)
             htf_df = compute_all_indicators(htf_df, indicator_config)
+            if self._is_htf_stale(htf_df, htf):
+                logger.warning(f"[Engine] {symbol}: stale HTF data on {htf} — skipping signal")
+                return None
+            htf_frames[htf] = htf_df
+
+        missing_bias = [name for name in bias_timeframes if name not in htf_frames]
+        if missing_bias:
+            # FIX[5]: Require all configured bias timeframes (strict AND gate).
+            logger.debug(
+                f"[Engine] {symbol}: missing HTF bias frames {missing_bias} — no trade"
+            )
+            return None
+
+        primary_htf_df = htf_frames[bias_timeframes[0]]
 
         # Run each eligible strategy and pick the strongest signal
         candidate_signals: List[Signal] = []
@@ -143,9 +168,14 @@ class StrategyEngine:
                 df=df,
                 regime=regime.value,
                 timeframe=tf,
-                higher_tf_df=htf_df,
+                higher_tf_df=primary_htf_df,
             )
             if signal:
+                if not self._passes_multi_htf_gate(signal, htf_frames):
+                    logger.info(
+                        f"[Engine] {symbol}: {signal.strategy_name} rejected by multi-HTF bias gate"
+                    )
+                    continue
                 candidate_signals.append(signal)
 
         best_signal = self._select_best_signal(candidate_signals)
@@ -187,6 +217,95 @@ class StrategyEngine:
         if specialized_best.confidence >= (best.confidence - SPECIALIZED_SELECTION_MARGIN):
             return specialized_best
         return best
+
+    @staticmethod
+    def _timeframe_seconds(timeframe: str) -> int:
+        units = {
+            "m": 60,
+            "h": 3600,
+            "d": 86400,
+        }
+        if not timeframe:
+            return 0
+        unit = timeframe[-1].lower()
+        try:
+            value = int(timeframe[:-1])
+        except Exception:
+            return 0
+        return value * units.get(unit, 0)
+
+    @classmethod
+    def _is_htf_stale(cls, htf_df: pd.DataFrame, timeframe: str) -> bool:
+        if htf_df.empty:
+            return True
+        if "open_time" not in htf_df.columns:
+            return False
+
+        latest_open = htf_df.iloc[-1].get("open_time")
+        if latest_open is None or pd.isna(latest_open):
+            return True
+
+        try:
+            latest_dt = pd.Timestamp(latest_open).to_pydatetime()
+        except Exception:
+            return True
+        if latest_dt.tzinfo is not None:
+            latest_dt = latest_dt.astimezone(datetime.UTC).replace(tzinfo=None)
+
+        now_utc = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+        age_seconds = max(0.0, (now_utc - latest_dt).total_seconds())
+        tf_seconds = cls._timeframe_seconds(timeframe)
+        if tf_seconds <= 0:
+            return False
+        # FIX[5]: Staleness threshold is configurable in bars (default 2.5 bars).
+        max_staleness_bars = float(getattr(settings, "max_htf_staleness_bars", 2.5) or 2.5)
+        return age_seconds > (tf_seconds * max_staleness_bars)
+
+    @staticmethod
+    def _passes_single_htf_gate(signal: Signal, htf_df: pd.DataFrame) -> bool:
+        if htf_df.empty:
+            return False
+
+        latest = htf_df.iloc[-1]
+        close = latest.get("close")
+        ema_long = latest.get("ema_long")
+        rsi_val = latest.get("rsi")
+
+        if pd.isna(close) or pd.isna(ema_long):
+            return False
+
+        is_long = signal.direction.value == "LONG"
+        if is_long and float(close) < float(ema_long):
+            return False
+        if not is_long and float(close) > float(ema_long):
+            return False
+
+        if rsi_val is not None and not pd.isna(rsi_val):
+            if is_long and float(rsi_val) < 50.0:
+                return False
+            if not is_long and float(rsi_val) > 50.0:
+                return False
+
+        st_dir_col = next((c for c in htf_df.columns if c.startswith("SUPERTd_")), None)
+        if st_dir_col:
+            st_dir = latest.get(st_dir_col)
+            if st_dir is not None and not pd.isna(st_dir):
+                if is_long and float(st_dir) <= 0:
+                    return False
+                if not is_long and float(st_dir) >= 0:
+                    return False
+
+        return True
+
+    def _passes_multi_htf_gate(self, signal: Signal, htf_frames: Dict[str, pd.DataFrame]) -> bool:
+        for tf_name, htf_df in htf_frames.items():
+            if not self._passes_single_htf_gate(signal, htf_df):
+                logger.info(
+                    f"[Engine] {signal.symbol}: HTF gate failed on {tf_name} "
+                    f"for {signal.direction.value}"
+                )
+                return False
+        return True
 
     def evaluate_all(self) -> List[Signal]:
         """Evaluate all configured trading pairs and return any signals."""

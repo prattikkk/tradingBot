@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import datetime
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from loguru import logger
 
@@ -30,6 +30,9 @@ from alphabot.database.db import Database
 from alphabot.database.models import SignalLog
 from alphabot.risk.position_sizer import PositionSizer
 from alphabot.strategies.signal import Signal, SignalDirection
+
+
+RR_COMPARISON_EPSILON = 1e-9
 
 
 class RiskManager:
@@ -186,22 +189,26 @@ class RiskManager:
             return False, reason, {}
 
         # ---- Minimum signal confidence ----
+        # FIX[6]: Normalize ratio-scale (0-1) and percent-scale (0-100) confidence values.
+        signal_conf_pct = self._confidence_to_percent(signal.confidence)
         min_confidence = self._min_confidence_for_signal(signal)
-        if signal.confidence < min_confidence:
-            reason = f"LOW CONFIDENCE — {signal.confidence:.1f} < {min_confidence}"
+        if signal_conf_pct < min_confidence:
+            reason = f"LOW CONFIDENCE — {signal_conf_pct:.1f} < {min_confidence}"
             self._log_rejection(signal, reason)
             return False, reason, {}
 
         # ---- Minimum Risk:Reward ratio ----
         rr = signal.risk_reward_ratio
-        if rr < float(settings.min_risk_reward):
+        min_rr = float(settings.min_risk_reward)
+        # Tolerate floating-point representation noise at exact threshold boundaries.
+        if rr < (min_rr - RR_COMPARISON_EPSILON):
             reason = f"LOW R:R — {rr:.2f} < {settings.min_risk_reward}"
             self._log_rejection(signal, reason)
             return False, reason, {}
 
         net_rr = self._net_rr_after_fees(signal)
         min_net_rr = self._min_net_rr_for_signal(signal)
-        if net_rr < min_net_rr:
+        if net_rr < (min_net_rr - RR_COMPARISON_EPSILON):
             reason = f"LOW NET R:R — {net_rr:.2f} after fees < {min_net_rr}"
             self._log_rejection(signal, reason)
             return False, reason, {}
@@ -244,7 +251,7 @@ class RiskManager:
         # ---- ALL CHECKS PASSED ----
         logger.info(
             f"[Risk] APPROVED: {signal.symbol} {signal.direction.value} "
-            f"conf={signal.confidence:.1f} R:R={rr:.2f} net_R:R={net_rr:.2f} qty={size_info['quantity']}"
+            f"conf={signal_conf_pct:.1f} R:R={rr:.2f} net_R:R={net_rr:.2f} qty={size_info['quantity']}"
         )
 
         # Log approved signal
@@ -385,9 +392,18 @@ class RiskManager:
 
     @staticmethod
     def _min_confidence_for_signal(signal: Signal) -> float:
+        configured = float(settings.min_signal_confidence)
         if signal.strategy_name == "liquidity_sweep_orderflow":
-            return float(settings.liquidity_sweep_orderflow_min_confidence) * 100.0
-        return float(settings.min_signal_confidence)
+            configured = float(settings.liquidity_sweep_orderflow_min_confidence)
+        return RiskManager._confidence_to_percent(configured)
+
+    @staticmethod
+    def _confidence_to_percent(value: float) -> float:
+        # FIX[6]: Treat values <= 1.0 as ratio confidence and convert to percentage.
+        conf = float(value)
+        if conf <= 1.0:
+            return conf * 100.0
+        return conf
 
     @staticmethod
     def _is_regime_aligned(regime: str, direction: SignalDirection) -> bool:

@@ -27,6 +27,7 @@ from alphabot.config import settings
 from alphabot.data.data_store import DataStore
 from alphabot.database.db import Database
 from alphabot.database.models import PositionRecord
+from alphabot.execution.order_executor import OrderExecutor
 from alphabot.positions.pnl_tracker import PnLTracker
 from alphabot.risk.risk_manager import RiskManager
 from alphabot.strategies.signal import Signal, SignalDirection
@@ -163,6 +164,7 @@ class PositionManager:
         # Cache for per-symbol ATR values used in trailing stop calculations.
         # Populated from strategy/execution layer via update_atr_cache().
         self._atr_cache: Dict[str, float] = {}
+        self._symbol_open_locks: Dict[str, asyncio.Lock] = {}
 
     def set_order_executor(self, executor) -> None:
         self.order_executor = executor
@@ -206,48 +208,93 @@ class PositionManager:
         Create a new position from an approved signal.
         Places entry order + protective SL order.
         """
-        position_id = str(uuid.uuid4())
-        qty = size_info["quantity"]
-        leverage = size_info["leverage"]
+        # FIX[1]: Serialize opens per symbol to prevent duplicate concurrent entries.
+        symbol_key = signal.symbol.upper()
+        open_lock = self._symbol_open_locks.setdefault(symbol_key, asyncio.Lock())
 
-        pos = Position(
-            position_id=position_id,
-            symbol=signal.symbol,
-            direction=signal.direction.value,
-            quantity=qty,
-            entry_price=signal.entry_price,
-            leverage=leverage,
-            sl_price=signal.stop_loss,
-            tp1_price=signal.take_profit_1,
-            tp2_price=signal.take_profit_2,
-            strategy_name=signal.strategy_name,
-            regime=signal.regime,
-            signal_confidence=signal.confidence,
-            size_usdt=size_info["size_usdt"],
-        )
-
-        # Place orders via executor
-        if self.order_executor:
-            try:
-                # Set leverage
-                await self.order_executor.set_leverage(signal.symbol, leverage)
-
-                # Market entry order
-                entry_order = await self.order_executor.place_market_order(
-                    symbol=signal.symbol,
-                    side="BUY" if signal.direction == SignalDirection.LONG else "SELL",
-                    quantity=float(qty),
+        async with open_lock:
+            if any(
+                p.symbol == signal.symbol and p.status in ("OPEN", "PARTIAL")
+                for p in self.open_positions
+            ):
+                logger.warning(
+                    f"[PosManager] Duplicate open prevented for {signal.symbol} "
+                    f"({signal.strategy_name})"
                 )
-                if entry_order:
-                    pos.order_ids.append(str(entry_order.get("orderId", "")))
+                return None
+
+            position_id = str(uuid.uuid4())
+            qty = size_info["quantity"]
+            leverage = size_info["leverage"]
+
+            pos = Position(
+                position_id=position_id,
+                symbol=signal.symbol,
+                direction=signal.direction.value,
+                quantity=qty,
+                entry_price=signal.entry_price,
+                leverage=leverage,
+                sl_price=signal.stop_loss,
+                tp1_price=signal.take_profit_1,
+                tp2_price=signal.take_profit_2,
+                strategy_name=signal.strategy_name,
+                regime=signal.regime,
+                signal_confidence=signal.confidence,
+                size_usdt=size_info["size_usdt"],
+            )
+
+            # Place orders via executor
+            if self.order_executor:
+                try:
+                    # FIX[3]: Use configured margin mode (explicit uppercase input).
+                    await self.order_executor.set_margin_mode(
+                        signal.symbol,
+                        settings.margin_mode.upper(),
+                    )
+
+                    # Set leverage
+                    await self.order_executor.set_leverage(signal.symbol, leverage)
+
+                    # Market entry order
+                    entry_order = await self.order_executor.place_market_order(
+                        symbol=signal.symbol,
+                        side="BUY" if signal.direction == SignalDirection.LONG else "SELL",
+                        quantity=float(qty),
+                    )
+                    entry_id = self._extract_order_id(entry_order)
+                    if not entry_id:
+                        logger.error(
+                            f"[PosManager] Entry order missing order id for {signal.symbol}; "
+                            f"position not opened"
+                        )
+                        return None
+
+                    filled_entry = await self.order_executor.wait_for_order_fill(
+                        signal.symbol,
+                        entry_id,
+                        initial_order=entry_order,
+                        timeout_seconds=float(getattr(settings, "order_fill_timeout_seconds", 6.0)),
+                    )
+                    if not filled_entry:
+                        logger.error(
+                            f"[PosManager] Entry fill not confirmed for {signal.symbol}; "
+                            f"position not opened"
+                        )
+                        try:
+                            await self.order_executor.cancel_all_orders(signal.symbol)
+                        except Exception:
+                            pass
+                        return None
+
+                    # FIX[2]: Always store normalized ccxt order ids (id/orderId/info.orderId).
+                    filled_entry_id = self._extract_order_id(filled_entry) or entry_id
+                    if filled_entry_id:
+                        pos.order_ids.append(filled_entry_id)
+
                     # Update entry price to actual exchange fill price to avoid SL
                     # distance mismatch caused by REST polling lag (signal price can
                     # be 0-30s stale when using REST fallback).
-                    actual_fill = (
-                        entry_order.get("avgPrice")
-                        or entry_order.get("average")
-                        or entry_order.get("price")
-                    )
+                    actual_fill = self._extract_order_fill_price(filled_entry)
                     if actual_fill:
                         try:
                             fill_price = Decimal(str(actual_fill))
@@ -260,41 +307,41 @@ class PositionManager:
                         except Exception:
                             pass
 
-                # Stop-loss order (placed immediately after entry)
-                sl_side = "SELL" if signal.direction == SignalDirection.LONG else "BUY"
-                sl_order = await self.order_executor.place_stop_market(
-                    symbol=signal.symbol,
-                    side=sl_side,
-                    quantity=float(qty),
-                    stop_price=float(signal.stop_loss),
-                    reduce_only=True,
-                )
-                if sl_order:
-                    sl_id = str(sl_order.get("orderId", "") or sl_order.get("id", ""))
-                    if sl_id:
-                        pos.sl_order_ids = [sl_id]
-                        pos.order_ids.append(sl_id)
+                    # Stop-loss order (placed immediately after entry)
+                    sl_side = "SELL" if signal.direction == SignalDirection.LONG else "BUY"
+                    sl_order = await self.order_executor.place_stop_market(
+                        symbol=signal.symbol,
+                        side=sl_side,
+                        quantity=float(qty),
+                        stop_price=float(signal.stop_loss),
+                        reduce_only=True,
+                    )
+                    if sl_order:
+                        sl_id = self._extract_order_id(sl_order)
+                        if sl_id:
+                            pos.sl_order_ids = [sl_id]
+                            pos.order_ids.append(sl_id)
 
-            except Exception as e:
-                logger.error(f"[PosManager] Failed to place orders for {signal.symbol}: {e}")
-                return None
+                except Exception as e:
+                    logger.error(f"[PosManager] Failed to place orders for {signal.symbol}: {e}")
+                    return None
 
-        # Register position
-        self._positions[position_id] = pos
+            # Register position
+            self._positions[position_id] = pos
 
-        # Persist to DB
-        self._persist_position(pos)
+            # Persist to DB
+            self._persist_position(pos)
 
-        # Notify
-        if self.notifier:
-            asyncio.create_task(self.notifier.notify_trade_opened(pos))
+            # Notify
+            if self.notifier:
+                asyncio.create_task(self.notifier.notify_trade_opened(pos))
 
-        logger.info(
-            f"[PosManager] Position opened: {position_id} {signal.symbol} "
-            f"{signal.direction.value} qty={qty} entry={signal.entry_price} "
-            f"SL={signal.stop_loss} TP1={signal.take_profit_1}"
-        )
-        return pos
+            logger.info(
+                f"[PosManager] Position opened: {position_id} {signal.symbol} "
+                f"{signal.direction.value} qty={qty} entry={signal.entry_price} "
+                f"SL={signal.stop_loss} TP1={signal.take_profit_1}"
+            )
+            return pos
 
     async def close_position(self, position_id: str, reason: str,
                               exit_price: Optional[Decimal] = None) -> None:
@@ -338,6 +385,15 @@ class PositionManager:
                     # Exchange stop/close likely filled first. Reconcile locally instead of
                     # retrying a second reduce-only close that can never fill.
                     close_confirmed = True
+                    # FIX[4]: Reconcile close price from exchange fills before final PnL recording.
+                    reconciled_exit = await self._reconcile_exchange_exit_price(pos)
+                    if reconciled_exit is not None:
+                        final_exit_price = reconciled_exit
+                        pos.current_price = reconciled_exit
+                        logger.info(
+                            f"[PosManager] {position_id}: reconciled exchange exit "
+                            f"price={reconciled_exit}"
+                        )
                     logger.warning(
                         f"[PosManager] {position_id}: ReduceOnly rejected while closing "
                         f"{pos.symbol}; position likely already closed on exchange, reconciling"
@@ -544,6 +600,80 @@ class PositionManager:
 
         return None
 
+    async def _reconcile_exchange_exit_price(self, pos: Position) -> Optional[Decimal]:
+        """Best-effort reconciliation of actual exit fill price from exchange history."""
+        if not self.order_executor:
+            return None
+
+        # FIX[4]: Prefer known order-id lookups, then fall back to recent trade history.
+        # 1) Prefer exact stop-order id lookup.
+        known_order_ids = [oid for oid in pos.sl_order_ids if oid]
+        if not known_order_ids:
+            known_order_ids = [oid for oid in pos.order_ids if oid]
+
+        for order_id in known_order_ids:
+            try:
+                order = await self.order_executor.get_order(pos.symbol, order_id)
+            except Exception as e:
+                logger.debug(
+                    f"[PosManager] reconciliation fetch_order failed for {pos.id} "
+                    f"order={order_id}: {e}"
+                )
+                continue
+
+            order_fill = self._extract_order_fill_price(order)
+            if order_fill is not None:
+                return order_fill
+
+        # 2) Fallback: infer from latest matching user trade after open-time.
+        try:
+            trades = await self.order_executor.get_my_trades(pos.symbol, limit=50)
+        except Exception as e:
+            logger.debug(f"[PosManager] reconciliation fetch_my_trades failed for {pos.id}: {e}")
+            return None
+
+        expected_close_side = "sell" if pos.direction == "LONG" else "buy"
+        opened_ms = int(pos.opened_at.timestamp() * 1000)
+        known_set = {str(oid) for oid in pos.order_ids if oid}
+
+        candidates: list[tuple[int, int, Decimal]] = []
+        for trade in trades or []:
+            if not isinstance(trade, dict):
+                continue
+
+            side = str(trade.get("side", "")).lower()
+            if side and side != expected_close_side:
+                continue
+
+            try:
+                ts = int(trade.get("timestamp") or 0)
+            except Exception:
+                ts = 0
+            if ts and ts < opened_ms:
+                continue
+
+            price_val = trade.get("price")
+            if price_val in (None, "", 0, "0", "0.0"):
+                continue
+            try:
+                price = Decimal(str(price_val))
+            except Exception:
+                continue
+            if price <= 0:
+                continue
+
+            order_ref = str(trade.get("order") or trade.get("orderId") or "")
+            score = 1
+            if order_ref and order_ref in known_set:
+                score += 2
+            candidates.append((score, ts, price))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return candidates[0][2]
+
     def _check_stop_loss(self, pos: Position, price: Decimal) -> bool:
         if pos.direction == "LONG":
             return price <= pos.sl_price
@@ -728,7 +858,7 @@ class PositionManager:
 
             new_sl_id = ""
             if sl_order:
-                new_sl_id = str(sl_order.get("orderId", "") or sl_order.get("id", ""))
+                new_sl_id = self._extract_order_id(sl_order)
 
             pos.sl_order_ids = [new_sl_id] if new_sl_id else []
             if new_sl_id and new_sl_id not in pos.order_ids:
@@ -790,6 +920,11 @@ class PositionManager:
             except Exception:
                 continue
         return None
+
+    @staticmethod
+    def _extract_order_id(order: Optional[dict]) -> str:
+        # FIX[2]: Reuse canonical executor helper for ccxt id normalization.
+        return OrderExecutor._extract_order_id(order)
 
     @staticmethod
     def _effective_exit_price(
@@ -910,11 +1045,17 @@ class PositionManager:
                 pos.trailing_stop_price = Decimal(str(rec.trailing_stop_price))
             order_ids_raw = getattr(rec, "order_ids", None)
             if order_ids_raw is not None and str(order_ids_raw).strip():
-                pos.order_ids = json.loads(str(order_ids_raw))
+                pos.order_ids = [
+                    str(v) for v in json.loads(str(order_ids_raw)) if str(v).strip()
+                ]
             if getattr(rec, "tp_order_ids", None):
-                pos.tp_order_ids = json.loads(str(rec.tp_order_ids))
+                pos.tp_order_ids = [
+                    str(v) for v in json.loads(str(rec.tp_order_ids)) if str(v).strip()
+                ]
             if getattr(rec, "sl_order_ids", None):
-                pos.sl_order_ids = json.loads(str(rec.sl_order_ids))
+                pos.sl_order_ids = [
+                    str(v) for v in json.loads(str(rec.sl_order_ids)) if str(v).strip()
+                ]
             self._positions[str(rec.id)] = pos
             logger.info(f"[PosManager] Recovered position: {rec.id} {rec.symbol} {rec.direction}")
 

@@ -3,11 +3,12 @@ import pytest
 import pandas as pd
 import numpy as np
 from decimal import Decimal
+from unittest.mock import Mock
 
 from alphabot.config import settings
 from alphabot.strategies.signal import Signal, SignalDirection, compute_confidence
 from alphabot.strategies.engine import StrategyEngine
-from alphabot.strategies.liquidity_sweep_orderflow import LiquiditySweepOrderFlowStrategy
+from alphabot.strategies.liquidity_sweep_orderflow import LiquiditySweepOrderFlowStrategy, htf_bias
 from alphabot.strategies.orderflow_liquidity_sweep import OrderFlowLiquiditySweepStrategy
 from alphabot.strategies.supertrend_pullback import SupertrendPullbackStrategy
 from alphabot.strategies.supertrend_rsi import SupertrendRsiStrategy
@@ -40,7 +41,7 @@ def _make_df(n: int = 100, base: float = 100.0, trend: float = 0.0,
         closes.append(c)
     highs = [c + abs(np.random.normal(0, 0.3 * vol_factor)) for c in closes]
     lows = [c - abs(np.random.normal(0, 0.3 * vol_factor)) for c in closes]
-    opens = [(h + l) / 2 for h, l in zip(highs, lows)]
+    opens = [(high + low) / 2 for high, low in zip(highs, lows)]
     volumes = [1000 + np.random.uniform(-200, 200) for _ in range(n)]
     return pd.DataFrame({
         "open": opens,
@@ -361,6 +362,20 @@ class TestSupertrendRsiStrategy:
         assert isinstance(result, Signal)
         assert result.direction == SignalDirection.LONG
 
+    def test_tp1_rr_matches_atr_multipliers(self, strategy):
+        df = _make_supertrend_df(SignalDirection.LONG)
+        htf_df = df.copy()
+
+        result = strategy.generate_signal(
+            "BTCUSDT", df, MarketRegime.TRENDING_UP.value, "15m", higher_tf_df=htf_df
+        )
+
+        assert isinstance(result, Signal)
+        expected_rr = float(settings.supertrend_atr_tp1_multiplier) / float(
+            settings.supertrend_atr_sl_multiplier
+        )
+        assert result.risk_reward_ratio == pytest.approx(expected_rr, rel=1e-3)
+
     def test_strategy_name(self, strategy):
         assert strategy.name == "supertrend_rsi"
 
@@ -473,6 +488,14 @@ class TestLiquiditySweepOrderFlowStrategy:
     def strategy(self):
         return LiquiditySweepOrderFlowStrategy()
 
+    def test_htf_bias_helper_detects_bearish_frame(self):
+        bearish_df = pd.DataFrame({"close": np.linspace(112.0, 98.0, 80)})
+        assert htf_bias(bearish_df, fast=20, slow=50) == "bear"
+
+    def test_htf_bias_helper_detects_neutral_frame(self):
+        neutral_df = pd.DataFrame({"close": [100.0] * 80})
+        assert htf_bias(neutral_df, fast=20, slow=50) == "neutral"
+
     def test_generates_long_signal(self, strategy):
         df = _make_liquidity_sweep_orderflow_df(SignalDirection.LONG)
         htf_df = df.copy()
@@ -485,10 +508,26 @@ class TestLiquiditySweepOrderFlowStrategy:
         assert result.direction == SignalDirection.LONG
         assert result.strategy_name == "liquidity_sweep_orderflow"
 
+    def test_tp1_rr_matches_atr_multipliers(self, strategy):
+        df = _make_liquidity_sweep_orderflow_df(SignalDirection.LONG)
+        htf_df = df.copy()
+        htf_df["close"] = np.linspace(98.0, 112.0, len(htf_df))
+
+        result = strategy.generate_signal(
+            "BTCUSDT", df, MarketRegime.RANGING.value, "15m", higher_tf_df=htf_df
+        )
+
+        assert isinstance(result, Signal)
+        expected_rr = float(settings.liquidity_sweep_orderflow_tp1_atr_mult) / float(
+            settings.liquidity_sweep_orderflow_sl_atr_mult
+        )
+        assert result.risk_reward_ratio == pytest.approx(expected_rr, rel=1e-3)
+
     def test_generates_short_signal(self, strategy):
         df = _make_liquidity_sweep_orderflow_df(SignalDirection.SHORT)
         htf_df = df.copy()
         htf_df["close"] = np.linspace(112.0, 98.0, len(htf_df))
+        assert htf_bias(htf_df, fast=20, slow=50) == "bear"
 
         result = strategy.generate_signal(
             "BTCUSDT", df, MarketRegime.HIGH_VOLATILITY.value, "15m", higher_tf_df=htf_df
@@ -496,6 +535,27 @@ class TestLiquiditySweepOrderFlowStrategy:
         assert isinstance(result, Signal)
         assert result.direction == SignalDirection.SHORT
         assert result.strategy_name == "liquidity_sweep_orderflow"
+
+    def test_rejects_short_when_htf_bias_is_bullish(self, strategy):
+        df = _make_liquidity_sweep_orderflow_df(SignalDirection.SHORT)
+        bullish_htf = df.copy()
+        bullish_htf["close"] = np.linspace(98.0, 112.0, len(bullish_htf))
+        assert htf_bias(bullish_htf, fast=20, slow=50) == "bull"
+
+        result = strategy.generate_signal(
+            "BTCUSDT", df, MarketRegime.HIGH_VOLATILITY.value, "15m", higher_tf_df=bullish_htf
+        )
+        assert result is None
+
+    def test_rejects_short_when_htf_bias_is_not_bearish(self, strategy):
+        df = _make_liquidity_sweep_orderflow_df(SignalDirection.SHORT)
+        neutral_htf = df.copy()
+        neutral_htf["close"] = 100.0
+
+        result = strategy.generate_signal(
+            "BTCUSDT", df, MarketRegime.HIGH_VOLATILITY.value, "15m", higher_tf_df=neutral_htf
+        )
+        assert result is None
 
     def test_rejects_when_no_sweep(self, strategy):
         df = _make_liquidity_sweep_orderflow_df(SignalDirection.LONG)
@@ -531,6 +591,20 @@ class TestEmaAdxVolumeStrategy:
         )
         assert isinstance(result, Signal)
         assert result.direction == SignalDirection.LONG
+
+    def test_tp1_rr_matches_atr_multipliers(self, strategy):
+        df = _make_ema_adx_df(SignalDirection.LONG)
+        htf_df = df.copy()
+
+        result = strategy.generate_signal(
+            "BTCUSDT", df, MarketRegime.TRENDING_UP.value, "15m", higher_tf_df=htf_df
+        )
+
+        assert isinstance(result, Signal)
+        expected_rr = float(settings.ema_adx_atr_tp1_multiplier) / float(
+            settings.ema_adx_atr_sl_multiplier
+        )
+        assert result.risk_reward_ratio == pytest.approx(expected_rr, rel=1e-3)
 
     def test_rejects_long_on_bearish_reversal_candle(self, strategy):
         df = _make_ema_adx_df(SignalDirection.LONG)
@@ -598,6 +672,60 @@ class TestStrategyEngineSelection:
         selected = StrategyEngine._select_best_signal(candidates)
         assert selected is not None
         assert selected.strategy_name == "supertrend_rsi"
+
+    def test_multi_htf_gate_rejects_when_any_bias_frame_disagrees(self):
+        signal = self._mk_signal("supertrend_trail", 78.0)
+
+        htf_aligned = pd.DataFrame(
+            {
+                "close": [102.0],
+                "ema_long": [100.0],
+                "rsi": [56.0],
+                "SUPERTd_10_3.0": [1.0],
+            }
+        )
+        htf_conflict = pd.DataFrame(
+            {
+                "close": [98.0],
+                "ema_long": [100.0],
+                "rsi": [44.0],
+                "SUPERTd_10_3.0": [-1.0],
+            }
+        )
+
+        engine = StrategyEngine(data_store=Mock(), regime_detector=Mock())
+        allowed = engine._passes_multi_htf_gate(
+            signal,
+            {"1h": htf_aligned, "4h": htf_conflict},
+        )
+        assert allowed is False
+
+    def test_is_htf_stale_flags_old_frame_time(self):
+        stale_df = pd.DataFrame(
+            {
+                "open_time": [pd.Timestamp.utcnow() - pd.Timedelta(hours=6)],
+                "close": [100.0],
+                "ema_long": [100.0],
+            }
+        )
+
+        assert StrategyEngine._is_htf_stale(stale_df, "1h") is True
+
+    def test_is_htf_stale_respects_configured_staleness_bars(self, monkeypatch):
+        # FIX[5]: HTF staleness threshold must follow settings.max_htf_staleness_bars.
+        frame = pd.DataFrame(
+            {
+                "open_time": [pd.Timestamp.utcnow() - pd.Timedelta(hours=4)],
+                "close": [100.0],
+                "ema_long": [100.0],
+            }
+        )
+
+        monkeypatch.setattr(settings, "max_htf_staleness_bars", 5.0, raising=False)
+        assert StrategyEngine._is_htf_stale(frame, "1h") is False
+
+        monkeypatch.setattr(settings, "max_htf_staleness_bars", 3.0, raising=False)
+        assert StrategyEngine._is_htf_stale(frame, "1h") is True
 
 
 # ---------------------------------------------------------------------------

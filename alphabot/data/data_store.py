@@ -64,9 +64,14 @@ class DataStore:
         if not df.empty and candle.open_time in df["open_time"].values:
             return
 
-        self._buffers[key] = pd.concat(
-            [df, pd.DataFrame([new_row])], ignore_index=True
-        ).tail(self.lookback)
+        row_df = pd.DataFrame([new_row])
+        if df.empty:
+            # Build first row directly to avoid concat FutureWarning with empty/all-NA frame.
+            next_df = row_df
+        else:
+            next_df = pd.concat([df, row_df], ignore_index=True)
+
+        self._buffers[key] = next_df.tail(self.lookback)
 
         logger.debug(
             f"Candle stored: {candle.symbol} {candle.timeframe} "
