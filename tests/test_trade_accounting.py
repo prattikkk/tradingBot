@@ -31,6 +31,77 @@ def test_extract_order_id_normalizes_ccxt_schemas(order, expected):
     assert OrderExecutor._extract_order_id(order) == expected
 
 
+@pytest.mark.asyncio
+async def test_wait_for_order_fill_requires_95pct_before_confirmation():
+    client = Mock()
+    client.exchange = Mock()
+    executor = OrderExecutor(client)
+
+    snapshots = [
+        {"id": "o-1", "status": "open", "amount": 1.0, "filled": 0.40},
+        {"id": "o-1", "status": "open", "amount": 1.0, "filled": 0.94},
+        {"id": "o-1", "status": "open", "amount": 1.0, "filled": 0.95},
+    ]
+    state = {"i": 0}
+
+    async def _get_order(symbol, order_id):
+        idx = min(state["i"], len(snapshots) - 1)
+        state["i"] += 1
+        return snapshots[idx]
+
+    executor.get_order = AsyncMock(side_effect=_get_order)
+
+    result = await executor.wait_for_order_fill(
+        "BTCUSDT",
+        "o-1",
+        initial_order={"id": "o-1", "status": "open", "amount": 1.0, "filled": 0.20},
+        timeout_seconds=0.02,
+        poll_seconds=0.0,
+    )
+
+    assert result is not None
+    assert float(result["filled"]) == pytest.approx(0.95)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_order_fill_accepts_closed_status_even_if_underfilled():
+    client = Mock()
+    client.exchange = Mock()
+    executor = OrderExecutor(client)
+    executor.get_order = AsyncMock(
+        return_value={"id": "o-2", "status": "closed", "amount": 1.0, "filled": 0.40}
+    )
+
+    result = await executor.wait_for_order_fill(
+        "BTCUSDT",
+        "o-2",
+        initial_order={"id": "o-2", "status": "open", "amount": 1.0, "filled": 0.20},
+        timeout_seconds=0.01,
+        poll_seconds=0.0,
+    )
+
+    assert result is not None
+    assert str(result.get("status")).lower() == "closed"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_order_fill_times_out_when_partial_persists():
+    client = Mock()
+    client.exchange = Mock()
+    executor = OrderExecutor(client)
+    executor.get_order = AsyncMock(
+        return_value={"id": "o-3", "status": "open", "amount": 1.0, "filled": 0.60}
+    )
+
+    result = await executor.wait_for_order_fill(
+        "BTCUSDT",
+        "o-3",
+        timeout_seconds=0.005,
+        poll_seconds=0.001,
+    )
+    assert result is None
+
+
 def test_pnl_tracker_does_not_multiply_by_leverage(tmp_path):
     db = Database(db_path=str(tmp_path / "accounting.db"))
     tracker = PnLTracker(db)
@@ -222,6 +293,25 @@ def test_monitor_prices_fall_back_to_candle_close_when_no_live_price():
     assert low_price == Decimal("102.0")
 
 
+def test_get_atr_refreshes_cached_value_after_refresh_window():
+    data_store = Mock()
+    data_store.get_dataframe.return_value = pd.DataFrame([{"atr": 2.5}])
+
+    manager = PositionManager(
+        data_store=data_store,
+        database=Mock(),
+        risk_manager=Mock(),
+        pnl_tracker=Mock(),
+    )
+    manager._atr_cache["BTCUSDT"] = 1.0
+    manager._atr_cache_updated_at["BTCUSDT"] = (
+        datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=31)
+    )
+    refreshed = manager._get_atr("BTCUSDT")
+    assert refreshed == pytest.approx(2.5)
+    assert manager._atr_cache["BTCUSDT"] == pytest.approx(2.5)
+
+
 def test_breakeven_activation_uses_configurable_r_threshold(monkeypatch):
     manager = PositionManager(
         data_store=Mock(),
@@ -400,6 +490,55 @@ async def test_close_position_reconciles_reduceonly_rejection():
     order_executor.get_order.assert_awaited_with("SOLUSDT", "sl-order-1")
     risk_manager.record_trade_result.assert_called_once()
     pnl_tracker.record_trade.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_close_position_skips_reduce_only_when_exchange_position_absent():
+    order_executor = Mock()
+    order_executor.client = Mock()
+    order_executor.client.get_positions = AsyncMock(return_value=[])
+    order_executor.place_market_order = AsyncMock(return_value={"id": "should-not-run"})
+    order_executor.cancel_all_orders = AsyncMock(return_value=None)
+    order_executor.get_order = AsyncMock(return_value={"avgPrice": "94.2"})
+    order_executor.get_my_trades = AsyncMock(return_value=[])
+
+    db = Mock()
+    risk_manager = Mock()
+    pnl_tracker = Mock()
+
+    manager = PositionManager(
+        data_store=Mock(),
+        database=db,
+        risk_manager=risk_manager,
+        pnl_tracker=pnl_tracker,
+        order_executor=order_executor,
+    )
+
+    pos = Position(
+        position_id="p-no-exchange-pos",
+        symbol="SOLUSDT",
+        direction="LONG",
+        quantity=Decimal("2"),
+        entry_price=Decimal("100"),
+        leverage=5,
+        sl_price=Decimal("95"),
+        tp1_price=Decimal("110"),
+        tp2_price=Decimal("120"),
+        strategy_name="unit",
+        regime="TRENDING_UP",
+        signal_confidence=80.0,
+        size_usdt=Decimal("200"),
+    )
+    pos.sl_order_ids = ["sl-order-1"]
+    pos.order_ids = ["entry-order-1", "sl-order-1"]
+    manager._positions[pos.id] = pos
+
+    await manager.close_position(pos.id, "SL_HIT", Decimal("95"))
+
+    order_executor.client.get_positions.assert_awaited_once()
+    order_executor.place_market_order.assert_not_awaited()
+    assert pos.status == "CLOSED"
+    assert pos.remaining_qty == Decimal("0")
 
 
 @pytest.mark.asyncio

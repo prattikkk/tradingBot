@@ -221,14 +221,36 @@ class OrderExecutor:
         poll_seconds: float = 0.4,
     ) -> Optional[dict]:
         """Wait briefly for market fill confirmation before position bookkeeping."""
+        def _to_float(value: Any) -> Optional[float]:
+            try:
+                if value in (None, ""):
+                    return None
+                return float(value)
+            except Exception:
+                return None
+
         def _is_filled(snapshot: dict) -> bool:
             status = str(snapshot.get("status", "")).lower()
             if status in {"closed", "filled"}:
                 return True
-            try:
-                filled = float(snapshot.get("filled") or 0)
-            except Exception:
+
+            info = snapshot.get("info")
+            info_dict = info if isinstance(info, dict) else {}
+
+            filled = _to_float(snapshot.get("filled"))
+            if filled is None:
+                filled = _to_float(info_dict.get("executedQty"))
+            if filled is None:
                 filled = 0.0
+
+            requested = _to_float(snapshot.get("amount"))
+            if requested is None:
+                requested = _to_float(snapshot.get("origQty"))
+            if requested is None:
+                requested = _to_float(info_dict.get("origQty"))
+            if requested and requested > 0:
+                return (filled / requested) >= 0.95
+
             return filled > 0
 
         current = cast(dict, initial_order or {})

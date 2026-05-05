@@ -639,17 +639,22 @@ class TestEmaAdxVolumeStrategy:
 
 class TestStrategyEngineSelection:
     @staticmethod
-    def _mk_signal(strategy_name: str, confidence: float) -> Signal:
+    def _mk_signal(
+        strategy_name: str,
+        confidence: float,
+        direction: SignalDirection = SignalDirection.LONG,
+        regime: str = MarketRegime.TRENDING_UP.value,
+    ) -> Signal:
         return Signal(
             symbol="BTCUSDT",
-            direction=SignalDirection.LONG,
+            direction=direction,
             confidence=confidence,
             entry_price=Decimal("100"),
             stop_loss=Decimal("95"),
             take_profit_1=Decimal("108"),
             take_profit_2=Decimal("112"),
             strategy_name=strategy_name,
-            regime=MarketRegime.TRENDING_UP.value,
+            regime=regime,
             timeframe="15m",
         )
 
@@ -697,6 +702,102 @@ class TestStrategyEngineSelection:
         allowed = engine._passes_multi_htf_gate(
             signal,
             {"1h": htf_aligned, "4h": htf_conflict},
+        )
+        assert allowed is False
+
+    def test_multi_htf_gate_allows_supertrend_rsi_short_when_one_bias_frame_confirms(self):
+        signal = self._mk_signal(
+            "supertrend_rsi",
+            78.0,
+            direction=SignalDirection.SHORT,
+            regime=MarketRegime.TRENDING_DOWN.value,
+        )
+
+        htf_aligned = pd.DataFrame(
+            {
+                "close": [98.0],
+                "ema_long": [100.0],
+                "rsi": [44.0],
+                "SUPERTd_10_3.0": [-1.0],
+            }
+        )
+        htf_conflict = pd.DataFrame(
+            {
+                "close": [102.0],
+                "ema_long": [100.0],
+                "rsi": [56.0],
+                "SUPERTd_10_3.0": [1.0],
+            }
+        )
+
+        engine = StrategyEngine(data_store=Mock(), regime_detector=Mock())
+        allowed = engine._passes_multi_htf_gate(
+            signal,
+            {"1h": htf_conflict, "4h": htf_aligned},
+        )
+        assert allowed is True
+
+    def test_multi_htf_gate_allows_supertrend_rsi_long_when_one_bias_frame_confirms(self):
+        signal = self._mk_signal(
+            "supertrend_rsi",
+            78.0,
+            direction=SignalDirection.LONG,
+            regime=MarketRegime.TRENDING_UP.value,
+        )
+
+        htf_aligned = pd.DataFrame(
+            {
+                "close": [102.0],
+                "ema_long": [100.0],
+                "rsi": [56.0],
+                "SUPERTd_10_3.0": [1.0],
+            }
+        )
+        htf_conflict = pd.DataFrame(
+            {
+                "close": [98.0],
+                "ema_long": [100.0],
+                "rsi": [44.0],
+                "SUPERTd_10_3.0": [-1.0],
+            }
+        )
+
+        engine = StrategyEngine(data_store=Mock(), regime_detector=Mock())
+        allowed = engine._passes_multi_htf_gate(
+            signal,
+            {"1h": htf_conflict, "4h": htf_aligned},
+        )
+        assert allowed is True
+
+    def test_multi_htf_gate_rejects_supertrend_rsi_short_when_no_bias_frame_confirms(self):
+        signal = self._mk_signal(
+            "supertrend_rsi",
+            78.0,
+            direction=SignalDirection.SHORT,
+            regime=MarketRegime.TRENDING_DOWN.value,
+        )
+
+        htf_conflict_1h = pd.DataFrame(
+            {
+                "close": [102.0],
+                "ema_long": [100.0],
+                "rsi": [56.0],
+                "SUPERTd_10_3.0": [1.0],
+            }
+        )
+        htf_conflict_4h = pd.DataFrame(
+            {
+                "close": [101.5],
+                "ema_long": [100.0],
+                "rsi": [53.0],
+                "SUPERTd_10_3.0": [1.0],
+            }
+        )
+
+        engine = StrategyEngine(data_store=Mock(), regime_detector=Mock())
+        allowed = engine._passes_multi_htf_gate(
+            signal,
+            {"1h": htf_conflict_1h, "4h": htf_conflict_4h},
         )
         assert allowed is False
 

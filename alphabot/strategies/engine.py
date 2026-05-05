@@ -38,6 +38,7 @@ REGIME_STRATEGY_MAP: Dict[MarketRegime, List[type]] = {
         SupertrendTrailStrategy,
         SupertrendPullbackStrategy,
         SupertrendRsiStrategy,
+        LiquiditySweepOrderFlowStrategy,
         EmaAdxVolumeStrategy,
     ],
     MarketRegime.RANGING: [
@@ -298,8 +299,19 @@ class StrategyEngine:
         return True
 
     def _passes_multi_htf_gate(self, signal: Signal, htf_frames: Dict[str, pd.DataFrame]) -> bool:
-        for tf_name, htf_df in htf_frames.items():
-            if not self._passes_single_htf_gate(signal, htf_df):
+        frame_results = {
+            tf_name: self._passes_single_htf_gate(signal, htf_df)
+            for tf_name, htf_df in htf_frames.items()
+        }
+
+        # supertrend_rsi can proceed when at least one bias timeframe confirms.
+        if signal.strategy_name == "supertrend_rsi":
+            passed = [tf_name for tf_name, ok in frame_results.items() if ok]
+            if passed:
+                return True
+
+        for tf_name, ok in frame_results.items():
+            if not ok:
                 logger.info(
                     f"[Engine] {signal.symbol}: HTF gate failed on {tf_name} "
                     f"for {signal.direction.value}"

@@ -82,7 +82,8 @@ class SupertrendTrailStrategy(BaseStrategy):
         breakout_buf = float(settings.supertrend_trail_breakout_buffer_atr) * atr_val
         prev_high = float(prev.get("high", close))
         prev_low = float(prev.get("low", close))
-        if any(pd.isna(v) for v in [prev_high, prev_low]):
+        prev_close = float(prev.get("close", close))
+        if any(pd.isna(v) for v in [prev_high, prev_low, prev_close]):
             return None
 
         if direction == SignalDirection.LONG:
@@ -99,7 +100,7 @@ class SupertrendTrailStrategy(BaseStrategy):
                 return None
             if rsi_val > float(settings.supertrend_trail_rsi_short_max):
                 return None
-            if close > (prev_low - breakout_buf):
+            if close > (prev_close - breakout_buf):
                 return None
             if close > open_price:
                 return None

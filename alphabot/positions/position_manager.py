@@ -164,6 +164,7 @@ class PositionManager:
         # Cache for per-symbol ATR values used in trailing stop calculations.
         # Populated from strategy/execution layer via update_atr_cache().
         self._atr_cache: Dict[str, float] = {}
+        self._atr_cache_updated_at: Dict[str, datetime.datetime] = {}
         self._symbol_open_locks: Dict[str, asyncio.Lock] = {}
 
     def set_order_executor(self, executor) -> None:
@@ -343,6 +344,60 @@ class PositionManager:
             )
             return pos
 
+    async def _has_exchange_open_position(self, symbol: str) -> Optional[bool]:
+        """Return exchange-side open position status for symbol when supported."""
+        if not self.order_executor:
+            return None
+
+        client = getattr(self.order_executor, "client", None)
+        get_positions = getattr(client, "get_positions", None)
+        if not callable(get_positions):
+            return None
+
+        try:
+            positions_result = get_positions()
+            if asyncio.iscoroutine(positions_result):
+                positions = await positions_result
+            else:
+                positions = positions_result
+        except Exception as e:
+            logger.debug(f"[PosManager] get_positions pre-check failed for {symbol}: {e}")
+            return None
+
+        symbol_upper = str(symbol or "").upper()
+        raw_positions: Any = positions
+        if isinstance(raw_positions, dict):
+            positions_iter = raw_positions.get("positions") or raw_positions.get("result") or []
+        elif isinstance(raw_positions, (list, tuple)):
+            positions_iter = raw_positions
+        else:
+            positions_iter = []
+
+        for raw in positions_iter:
+            if not isinstance(raw, dict):
+                continue
+
+            info = raw.get("info")
+            info_dict = info if isinstance(info, dict) else {}
+            pos_symbol = str(raw.get("symbol") or info_dict.get("symbol") or "").upper()
+            if pos_symbol != symbol_upper:
+                continue
+
+            contracts_raw = raw.get("contracts")
+            if contracts_raw is None:
+                contracts_raw = info_dict.get("positionAmt")
+            if contracts_raw is None:
+                return True
+
+            try:
+                contracts = abs(float(contracts_raw))
+            except Exception:
+                contracts = 0.0
+            if contracts > 0:
+                return True
+
+        return False
+
     async def close_position(self, position_id: str, reason: str,
                               exit_price: Optional[Decimal] = None) -> None:
         """Close a position fully."""
@@ -364,20 +419,33 @@ class PositionManager:
         # Close via executor
         if self.order_executor and close_qty > 0:
             try:
-                close_side = "SELL" if pos.direction == "LONG" else "BUY"
-                close_order = await self.order_executor.place_market_order(
-                    symbol=pos.symbol,
-                    side=close_side,
-                    quantity=float(close_qty),
-                    reduce_only=True,
-                )
-                exchange_exit = self._extract_order_fill_price(close_order)
-                if exchange_exit is not None:
-                    final_exit_price = exchange_exit
-                    pos.current_price = exchange_exit
-                close_confirmed = True
-                # Cancel any outstanding orders for this position
-                await self.order_executor.cancel_all_orders(pos.symbol)
+                exchange_has_open_position = await self._has_exchange_open_position(pos.symbol)
+                if exchange_has_open_position is False:
+                    close_confirmed = True
+                    reconciled_exit = await self._reconcile_exchange_exit_price(pos)
+                    if reconciled_exit is not None:
+                        final_exit_price = reconciled_exit
+                        pos.current_price = reconciled_exit
+                    logger.info(
+                        f"[PosManager] {position_id}: no open exchange contracts for "
+                        f"{pos.symbol}; skipping reduce-only market close"
+                    )
+                    await self.order_executor.cancel_all_orders(pos.symbol)
+                else:
+                    close_side = "SELL" if pos.direction == "LONG" else "BUY"
+                    close_order = await self.order_executor.place_market_order(
+                        symbol=pos.symbol,
+                        side=close_side,
+                        quantity=float(close_qty),
+                        reduce_only=True,
+                    )
+                    exchange_exit = self._extract_order_fill_price(close_order)
+                    if exchange_exit is not None:
+                        final_exit_price = exchange_exit
+                        pos.current_price = exchange_exit
+                    close_confirmed = True
+                    # Cancel any outstanding orders for this position
+                    await self.order_executor.cancel_all_orders(pos.symbol)
             except Exception as e:
                 err_str = str(e)
                 err_str_lower = err_str.lower()
@@ -940,25 +1008,34 @@ class PositionManager:
         return entry_price - (gross_pnl / quantity)
 
     def _get_atr(self, symbol: str) -> float:
-        """Get latest ATR value for a symbol from cache.
-        Cache is updated only on candle close, not on every monitor loop tick.
-        """
-        # Return cached value if available
-        if symbol in self._atr_cache:
-            return self._atr_cache[symbol]
-        
-        # Fallback: compute once and cache
+        """Get ATR with bounded cache staleness so trail distance stays current."""
+        refresh_seconds = float(getattr(settings, "atr_cache_refresh_seconds", 30.0) or 30.0)
+        now = datetime.datetime.now(datetime.UTC)
+
+        cached = self._atr_cache.get(symbol)
+        last_updated = self._atr_cache_updated_at.get(symbol)
+        if cached is not None and last_updated is not None:
+            age_seconds = (now - last_updated).total_seconds()
+            if age_seconds < refresh_seconds:
+                return cached
+
         df = self.data_store.get_dataframe(symbol, settings.primary_timeframe)
-        if df.empty or 'atr' not in df.columns:
-            return 0.0
-        
-        atr_val = float(df['atr'].iloc[-1]) if not df['atr'].isna().all() else 0.0
+        if df.empty or "atr" not in df.columns or df["atr"].isna().all():
+            return cached if cached is not None else 0.0
+
+        try:
+            atr_val = float(df["atr"].iloc[-1])
+        except Exception:
+            return cached if cached is not None else 0.0
+
         self._atr_cache[symbol] = atr_val
+        self._atr_cache_updated_at[symbol] = now
         return atr_val
-    
+
     def update_atr_cache(self, symbol: str, atr_val: float) -> None:
         """Update ATR cache when new candle closes. Call this from strategy engine."""
-        self._atr_cache[symbol] = atr_val
+        self._atr_cache[symbol] = float(atr_val)
+        self._atr_cache_updated_at[symbol] = datetime.datetime.now(datetime.UTC)
 
     def _persist_position(self, pos: Position) -> None:
         """Save position to database."""
