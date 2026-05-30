@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from urllib.request import urlopen
 from urllib.parse import urlparse
+
+_log = logging.getLogger("Dashboard")
 
 from config import CONFIG
 from core.control_plane import enqueue_command, get_control_state, set_paused, update_control_state
@@ -81,8 +85,89 @@ def _load_state() -> dict:
         return {"balance": 0.0, "open_positions": {}, "closed_trades": []}
     try:
         return json.loads(PORTFOLIO_PATH.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as e:
+        _log.warning("Portfolio state load failed: %s", e)
         return {"balance": 0.0, "open_positions": {}, "closed_trades": []}
+
+
+def _fetch_mark_prices(symbols: list[str]) -> dict[str, float]:
+    if not symbols:
+        return {}
+
+    wanted = {str(s).upper() for s in symbols if s}
+    urls = [
+        "https://fapi.binance.com/fapi/v1/ticker/price",
+        "https://testnet.binancefuture.com/fapi/v1/ticker/price",
+    ]
+
+    for url in urls:
+        try:
+            with urlopen(url, timeout=3) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            continue
+
+        rows = payload if isinstance(payload, list) else [payload]
+        prices: dict[str, float] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("symbol", "")).upper()
+            if symbol not in wanted:
+                continue
+
+            price_raw = row.get("price")
+            if price_raw is None:
+                continue
+
+            try:
+                prices[symbol] = float(price_raw)
+            except Exception:
+                continue
+
+        if prices:
+            return prices
+
+    return {}
+
+
+def _enrich_open_positions_with_live_pnl(payload: dict) -> None:
+    open_positions = payload.get("open_positions")
+    if not isinstance(open_positions, dict) or not open_positions:
+        return
+
+    symbols = [str(s).upper() for s in open_positions.keys()]
+    mark_prices = _fetch_mark_prices(symbols)
+
+    for symbol, pos in open_positions.items():
+        if not isinstance(pos, dict):
+            continue
+
+        order_ids_raw = pos.get("order_ids")
+        order_ids = order_ids_raw if isinstance(order_ids_raw, dict) else {}
+        has_exchange_protection = any(order_ids.get(k) for k in ("sl", "tp1", "tp2", "trail"))
+        pos["protection_mode"] = "exchange" if has_exchange_protection else "client"
+
+        mark = mark_prices.get(str(symbol).upper())
+        if mark is None:
+            continue
+
+        try:
+            entry = float(pos.get("entry_price", 0.0))
+            qty = float(pos.get("quantity", 0.0))
+            realized_partial = float(pos.get("pnl", 0.0))
+        except Exception:
+            continue
+
+        direction = str(pos.get("direction", "")).upper()
+        if direction == "LONG":
+            unrealized = (mark - entry) * qty
+        else:
+            unrealized = (entry - mark) * qty
+
+        pos["mark_price"] = mark
+        pos["unrealized_pnl"] = unrealized
+        pos["live_pnl"] = realized_partial + unrealized
 
 
 def _to_float(value, min_value: float, max_value: float) -> float | None:
@@ -107,6 +192,7 @@ def _to_int(value, min_value: int, max_value: int) -> int | None:
 
 def _load_dashboard_state() -> dict:
     payload = _load_state()
+    _enrich_open_positions_with_live_pnl(payload)
     payload["control"] = get_control_state()
     return payload
 
@@ -435,7 +521,7 @@ def _render_html() -> str:
     <div class=\"panel\">
       <h2>Open Positions</h2>
       <table>
-        <thead><tr><th>Symbol</th><th>Direction</th><th>Entry</th><th>SL</th><th>Qty</th><th>PnL</th><th>Action</th></tr></thead>
+        <thead><tr><th>Symbol</th><th>Direction</th><th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th><th>Mark</th><th>Qty</th><th>Guard</th><th>Live PnL</th><th>Action</th></tr></thead>
         <tbody id=\"openRows\"></tbody>
       </table>
     </div>
@@ -453,6 +539,12 @@ def _render_html() -> str:
 function pnlClass(v) {
   const n = Number(v || 0);
   return n >= 0 ? 'pnl-pos' : 'pnl-neg';
+}
+
+function fmtPrice(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '-';
+  return n.toFixed(4);
 }
 
 async function apiControl(action, payload = {}) {
@@ -530,7 +622,7 @@ async function refresh() {
   }
 
   document.getElementById('openRows').innerHTML = open.map(p =>
-    `<tr><td>${p.symbol}</td><td>${p.direction}</td><td>${Number(p.entry_price||0).toFixed(4)}</td><td>${Number(p.stop_loss||0).toFixed(4)}</td><td>${Number(p.quantity||0).toFixed(4)}</td><td class="${pnlClass(p.pnl)}">${Number(p.pnl||0).toFixed(2)}</td><td><span class="inline-actions"><button class="small-btn warn" onclick="closeSymbol('${p.symbol}')">Close</button></span></td></tr>`
+    `<tr><td>${p.symbol}</td><td>${p.direction}</td><td>${fmtPrice(p.entry_price)}</td><td>${fmtPrice(p.stop_loss)}</td><td>${fmtPrice(p.take_profit_1)}</td><td>${fmtPrice(p.take_profit_2)}</td><td>${fmtPrice(p.mark_price)}</td><td>${Number(p.quantity||0).toFixed(4)}</td><td>${p.protection_mode || '-'}</td><td class="${pnlClass(p.live_pnl ?? p.pnl)}">${Number((p.live_pnl ?? p.pnl)||0).toFixed(2)}</td><td><span class="inline-actions"><button class="small-btn warn" onclick="closeSymbol('${p.symbol}')">Close</button></span></td></tr>`
   ).join('');
 
   document.getElementById('closedRows').innerHTML = closed.map(t =>

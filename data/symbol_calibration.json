@@ -1,0 +1,35 @@
+{
+  "ETHUSDT": {
+    "regime_adx_trending": 24.0,
+    "regime_high_vol_quantile": 0.7,
+    "mean_reversion_vol_ratio_max": 1.14,
+    "mean_reversion_width_pct_max": 0.72,
+    "mean_reversion_stoch_oversold_k": 27,
+    "mean_reversion_stoch_oversold_d": 31,
+    "mean_reversion_stoch_overbought_k": 73,
+    "mean_reversion_stoch_overbought_d": 69,
+    "fallback_no_signal_cycles": 3,
+    "fallback_confidence_scale": 0.96
+  },
+  "SOLUSDT": {
+    "regime_adx_trending": 25.0,
+    "regime_high_vol_quantile": 0.72,
+    "mean_reversion_vol_ratio_max": 1.18,
+    "mean_reversion_width_pct_max": 0.78,
+    "mean_reversion_stoch_oversold_k": 28,
+    "mean_reversion_stoch_oversold_d": 33,
+    "mean_reversion_stoch_overbought_k": 72,
+    "mean_reversion_stoch_overbought_d": 68,
+    "fallback_no_signal_cycles": 3,
+    "fallback_confidence_scale": 0.95
+  },
+  "BNBUSDT": {
+    "regime_adx_trending": 19.0,
+    "breakout_period": 20,
+    "breakout_volume_ratio_min": 1.35,
+    "breakout_rsi_bull_min": 54,
+    "breakout_rsi_bear_max": 46,
+    "fallback_no_signal_cycles": 4,
+    "fallback_confidence_scale": 0.95
+  }
+}

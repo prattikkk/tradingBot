@@ -19,6 +19,7 @@ import pandas as pd
 from typing import Optional
 from core.signal import Signal, Direction
 from core.indicators import bollinger_bands, atr, rsi, ema, pivot_points, volume_profile
+from core.calibration import SYMBOL_CALIBRATION
 from config import CONFIG
 from utils.logger import get_logger
 
@@ -26,10 +27,10 @@ log = get_logger("Breakout")
 cfg = CONFIG.strategy
 risk = CONFIG.risk
 
-DONCHIAN_PERIOD = cfg.breakout_period
-VOL_RATIO_MIN   = 1.8
-RSI_BULL_MIN    = 52.0
-RSI_BEAR_MAX    = 48.0
+DEFAULT_DONCHIAN_PERIOD = cfg.breakout_period
+DEFAULT_VOL_RATIO_MIN = 1.8
+DEFAULT_RSI_BULL_MIN = 52.0
+DEFAULT_RSI_BEAR_MAX = 48.0
 
 
 class BreakoutMomentumStrategy:
@@ -42,20 +43,25 @@ class BreakoutMomentumStrategy:
         htf_df: Optional[pd.DataFrame] = None,
         htf_df2: Optional[pd.DataFrame] = None,
     ) -> Optional[Signal]:
-        if df is None or len(df) < DONCHIAN_PERIOD + 10:
+        donchian_period = int(SYMBOL_CALIBRATION.get(symbol, "breakout_period", DEFAULT_DONCHIAN_PERIOD))
+        if df is None or len(df) < max(12, donchian_period + 10):
             return None
         try:
-            return self._compute(symbol, df, htf_df, htf_df2)
+            return self._compute(symbol, df, htf_df, htf_df2, donchian_period)
         except Exception as e:
             log.error(f"[{symbol}] Breakout error: {e}", exc_info=True)
             return None
 
     # ------------------------------------------------------------------ #
 
-    def _compute(self, symbol, df, htf_df, htf_df2):
+    def _compute(self, symbol, df, htf_df, htf_df2, donchian_period: int):
         # Evaluate on closed bars only (-2 signal bar, -3 previous bar).
         signal_idx = -2
         prev_idx = -3
+
+        vol_ratio_min = float(SYMBOL_CALIBRATION.get(symbol, "breakout_volume_ratio_min", DEFAULT_VOL_RATIO_MIN))
+        rsi_bull_min = float(SYMBOL_CALIBRATION.get(symbol, "breakout_rsi_bull_min", DEFAULT_RSI_BULL_MIN))
+        rsi_bear_max = float(SYMBOL_CALIBRATION.get(symbol, "breakout_rsi_bear_max", DEFAULT_RSI_BEAR_MAX))
 
         close = df["close"]
         curr_price = close.iloc[signal_idx]
@@ -65,8 +71,8 @@ class BreakoutMomentumStrategy:
         bb_upper, bb_mid, bb_lower = bollinger_bands(close, 20, 2.0)
 
         # Donchian Channel
-        don_high = df["high"].rolling(DONCHIAN_PERIOD).max().shift(1)
-        don_low  = df["low"].rolling(DONCHIAN_PERIOD).min().shift(1)
+        don_high = df["high"].rolling(donchian_period).max().shift(1)
+        don_low  = df["low"].rolling(donchian_period).min().shift(1)
 
         # ATR & expansion
         _atr = atr(df, 14)
@@ -105,14 +111,14 @@ class BreakoutMomentumStrategy:
         # --- LONG BREAKOUT ---
         bull_bb     = prev_price <= prev_bb_upper and curr_price > curr_bb_upper
         bull_don    = curr_price > curr_don_high
-        bull_rsi    = curr_rsi > RSI_BULL_MIN
-        bull_vol    = curr_vol >= VOL_RATIO_MIN
+        bull_rsi    = curr_rsi > rsi_bull_min
+        bull_vol    = curr_vol >= vol_ratio_min
 
         # --- SHORT BREAKOUT ---
         bear_bb     = prev_price >= prev_bb_lower and curr_price < curr_bb_lower
         bear_don    = curr_price < curr_don_low
-        bear_rsi    = curr_rsi < RSI_BEAR_MAX
-        bear_vol    = curr_vol >= VOL_RATIO_MIN
+        bear_rsi    = curr_rsi < rsi_bear_max
+        bear_vol    = curr_vol >= vol_ratio_min
 
         if bull_bb and bull_don:
             direction = Direction.LONG

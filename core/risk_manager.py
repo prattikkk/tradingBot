@@ -41,7 +41,9 @@ class RiskManager:
         """
         Calculate position size using fixed fractional risk:
             risk_amount = capital × risk_per_trade
-            quantity = risk_amount / (entry - stop_loss) [adjusted for leverage]
+            quantity = risk_amount / (entry - stop_loss)
+
+        In futures, leverage affects required margin, not stop-loss dollars at risk.
         """
         capital = self.portfolio.available_capital()
         if capital <= 0:
@@ -71,7 +73,7 @@ class RiskManager:
         risk_amount *= sizing_mult
 
         # Raw quantity
-        qty = (risk_amount * risk_cfg.leverage) / risk_per_unit
+        qty = risk_amount / risk_per_unit
 
         # Adjust to exchange lot size
         step = exchange_info.get("step_size", 0.001)
@@ -102,7 +104,7 @@ class RiskManager:
             log.warning(f"[{signal.symbol}] notional=${notional:.2f} < min=${min_notional}")
             return None
 
-        actual_risk = qty * risk_per_unit / risk_cfg.leverage
+        actual_risk = qty * risk_per_unit
         log.info(
             f"[{signal.symbol}] {signal.direction.value} | "
             f"qty={qty} | notional=${notional:.2f} | risk=${actual_risk:.2f} | size_mult={sizing_mult:.2f}"
@@ -127,7 +129,20 @@ class RiskManager:
         total_risk = sum(
             p.get("risk_usdt", 0) for p in self.portfolio.open_positions.values()
         )
-        cap = self.portfolio.total_capital
+
+        basis = str(getattr(risk_cfg, "portfolio_risk_basis", "equity")).strip().lower()
+        if basis in {"equity", "wallet", "balance", "live_equity"}:
+            equity_getter = getattr(self.portfolio, "equity", None)
+            if callable(equity_getter):
+                cap = float(equity_getter())
+            else:
+                cap = float(getattr(self.portfolio, "_balance", self.portfolio.total_capital))
+        else:
+            cap = float(self.portfolio.total_capital)
+
+        if cap <= 0:
+            cap = float(self.portfolio.total_capital)
+
         max_risk = cap * risk_cfg.max_portfolio_risk
         return total_risk < max_risk
 

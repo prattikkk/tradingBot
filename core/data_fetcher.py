@@ -75,6 +75,25 @@ class DataFetcher:
         self._ws_prices: dict[str, tuple[float, float]] = {}
         self._ws_ttl_seconds = 5.0
 
+        # Background event loop running in a daemon thread for async API calls
+        self._loop = None
+        self._loop_thread = None
+        self._start_background_loop()
+
+    def _start_background_loop(self) -> None:
+        import threading
+        self._loop = asyncio.new_event_loop()
+        def run_loop(loop):
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+        self._loop_thread = threading.Thread(
+            target=run_loop,
+            args=(self._loop,),
+            daemon=True,
+            name="DataFetcherAsyncLoop"
+        )
+        self._loop_thread.start()
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -148,6 +167,13 @@ class DataFetcher:
         return added or bool(self._ws_symbol_sockets)
 
     def stop_price_stream(self) -> None:
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._loop_thread and self._loop_thread.is_alive():
+                self._loop_thread.join(timeout=2.0)
+            self._loop = None
+            self._loop_thread = None
+
         if not self._ws_started:
             return
         try:
@@ -199,9 +225,14 @@ class DataFetcher:
 
     def get_current_price(self, symbol: str) -> Optional[float]:
         """Fast ticker price from mainnet."""
+        price, _source = self.get_current_price_with_meta(symbol)
+        return price
+
+    def get_current_price_with_meta(self, symbol: str) -> tuple[Optional[float], str]:
+        """Return current price with source metadata (`ws`, `rest`, `none`)."""
         ws_price = self._ws_prices.get(symbol.upper())
         if ws_price and time.time() - ws_price[0] <= self._ws_ttl_seconds:
-            return ws_price[1]
+            return ws_price[1], "ws"
 
         payload = self._request_json_sync(
             url=f"{MAINNET_BASE}/fapi/v1/ticker/price",
@@ -210,12 +241,12 @@ class DataFetcher:
             endpoint_key="market:ticker_price",
         )
         if payload is None:
-            return None
+            return None, "none"
         try:
-            return float(payload["price"])
+            return float(payload["price"]), "rest"
         except Exception as e:
             log.error(f"Price parse failed [{symbol}]: {e}")
-            return None
+            return None, "none"
 
     def get_24h_quote_volume(self, symbol: str, use_cache: bool = True) -> Optional[float]:
         """24h quote-volume in USDT terms (futures first, then spot fallback)."""
@@ -434,7 +465,20 @@ class DataFetcher:
             asyncio.get_running_loop()
             return self._fetch_missing_multi_tf_sync(missing, limit)
         except RuntimeError:
-            return asyncio.run(self._fetch_missing_multi_tf_async(missing, limit))
+            pass
+
+        if self._loop and self._loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                self._fetch_missing_multi_tf_async(missing, limit),
+                self._loop
+            )
+            try:
+                return future.result()
+            except Exception as e:
+                log.error(f"Async bulk fetch failed: {e}", exc_info=True)
+                return self._fetch_missing_multi_tf_sync(missing, limit)
+        else:
+            return self._fetch_missing_multi_tf_sync(missing, limit)
 
     def _fetch_missing_multi_tf_sync(
         self,
@@ -635,7 +679,7 @@ class DataFetcher:
         df["taker_ratio"] = np.where(
             df["volume"] > 0,
             df["taker_buy_base"] / df["volume"],
-            0.5,
+            np.nan,
         )
         df["body"] = abs(df["close"] - df["open"])
         df["wick_upper"] = df["high"] - df[["open", "close"]].max(axis=1)

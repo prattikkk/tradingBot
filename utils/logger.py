@@ -8,6 +8,15 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Reconfigure streams on Windows to avoid UnicodeEncodeErrors from emojis
+if sys.platform.startswith("win"):
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except Exception:
+                pass
+
 try:
     from rich.logging import RichHandler
     from rich.console import Console

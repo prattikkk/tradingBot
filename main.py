@@ -87,6 +87,14 @@ class TradingBot:
         self._symbol_order = {symbol: idx for idx, symbol in enumerate(self.symbols)}
         self._runtime_paused = False
         self._runtime_overrides: dict[str, float | int] = {}
+        self._reconciliation_enabled = bool(getattr(CONFIG.trading, "reconciliation_enabled", True))
+        self._reconciliation_interval_seconds = max(
+            30.0,
+            float(getattr(CONFIG.trading, "reconciliation_interval_seconds", 300.0)),
+        )
+        self._last_reconciliation_ts = 0.0
+        self._no_signal_streaks: dict[str, int] = {}
+        self._last_evaluated_signal_bar_close: dict[str, float] = {}
 
         self.fetcher = create_data_fetcher(self.exchange)
         self.executor = create_executor(self.exchange)
@@ -95,11 +103,15 @@ class TradingBot:
         self.monitor = PositionMonitor(self.portfolio, self.executor, self.fetcher)
         self.ai_sentiment = AISentimentEngine()
 
-        self.fetcher.start_price_stream(self.symbols)
-        self._refresh_runtime_state()
-
-        self._sync_positions_from_exchange()
-        self._sync_balance_from_exchange()
+        try:
+            self.fetcher.start_price_stream(self.symbols)
+            self._refresh_runtime_state()
+            self._sync_positions_from_exchange()
+            self._sync_balance_from_exchange()
+            self._last_reconciliation_ts = time.time()
+        except Exception as e:
+            log.error("Startup initialization failed: %s", e, exc_info=True)
+            raise
 
         log.info(
             "Bot initialized | exchange=%s | strategy=%s | dry_run=%s | symbols=%s",
@@ -111,6 +123,23 @@ class TradingBot:
 
     def _sync_positions_from_exchange(self) -> None:
         """Reconcile local portfolio state with exchange positions at startup."""
+        self._reconcile_positions_from_exchange(startup=True)
+
+    def _run_periodic_reconciliation_if_due(self) -> None:
+        if not self._reconciliation_enabled:
+            return
+
+        now = time.time()
+        if now - self._last_reconciliation_ts < self._reconciliation_interval_seconds:
+            return
+
+        self._reconcile_positions_from_exchange(startup=False)
+        self._last_reconciliation_ts = now
+
+    def _reconcile_positions_from_exchange(self, startup: bool) -> None:
+        phase = "Startup sync" if startup else "Periodic sync"
+        close_reason = "SYNC_CLOSED_ON_EXCHANGE" if startup else "PERIODIC_SYNC_CLOSED_ON_EXCHANGE"
+
         exchange_positions = self.executor.get_open_positions(self.symbols)
 
         local_symbols = set(self.portfolio.open_positions.keys())
@@ -123,28 +152,259 @@ class TradingBot:
             exit_price = self.fetcher.get_current_price(symbol)
             if exit_price is None:
                 exit_price = float(self.portfolio.open_positions[symbol].get("entry_price", 0))
-            self.portfolio.close_position(symbol, float(exit_price), reason="SYNC_CLOSED_ON_EXCHANGE")
+            self.portfolio.close_position(symbol, float(exit_price), reason=close_reason)
             changed = True
-            log.warning("Startup sync: closed stale local position %s", symbol)
+            self._increment_metric("exchange_local_drift_detected")
+            self._increment_metric("exchange_local_drift_corrected")
+            log.warning("%s: closed stale local position %s", phase, symbol)
 
-        # Exchange-only positions are imported so monitoring can continue.
+        # Exchange-only positions are force-closed by policy, or imported when disabled.
+        force_close_untracked = bool(
+            getattr(CONFIG.trading, "force_close_untracked_exchange_positions", True)
+        )
         for symbol in sorted(exchange_symbols - local_symbols):
+            self._increment_metric("exchange_local_drift_detected")
+            if force_close_untracked:
+                if self._force_close_untracked_exchange_position(symbol, exchange_positions[symbol], phase):
+                    self._increment_metric("exchange_local_drift_corrected")
+                continue
+
             if self._import_exchange_position(exchange_positions[symbol]):
+                self._increment_metric("exchange_local_drift_corrected")
                 changed = True
 
         # Shared positions are aligned on quantity/direction/entry when drift exists.
         for symbol in sorted(local_symbols & exchange_symbols):
             if self._align_local_position(symbol, exchange_positions[symbol]):
+                self._increment_metric("exchange_local_drift_detected")
+                self._increment_metric("exchange_local_drift_corrected")
                 changed = True
 
         if changed:
             self.portfolio._save()
 
         log.info(
-            "Startup sync complete | local_open=%s | exchange_open=%s",
+            "%s complete | local_open=%s | exchange_open=%s",
+            phase,
             len(self.portfolio.open_positions),
             len(exchange_positions),
         )
+
+    def _force_close_untracked_exchange_position(self, symbol: str, remote: dict, phase: str) -> bool:
+        try:
+            signed_qty = float(remote.get("quantity", 0.0) or 0.0)
+        except Exception:
+            signed_qty = 0.0
+
+        qty = abs(signed_qty)
+        if qty <= 0:
+            return True
+
+        direction = "LONG" if signed_qty > 0 else "SHORT"
+
+        if self.dry_run:
+            log.warning(
+                "%s: dry-run mode; cannot force close untracked exchange position %s %s qty=%.6f",
+                phase,
+                symbol,
+                direction,
+                qty,
+            )
+            return False
+
+        self.executor.cancel_all_open_orders(symbol)
+        closed = self.executor.close_position_market(symbol, direction, qty)
+        if not closed:
+            log.error(
+                "%s: failed to force close untracked exchange position %s %s qty=%.6f",
+                phase,
+                symbol,
+                direction,
+                qty,
+            )
+            return False
+
+        residual = self.executor.get_open_positions([symbol])
+        if symbol in residual:
+            log.error(
+                "%s: untracked exchange position %s still open after corrective close",
+                phase,
+                symbol,
+            )
+            return False
+
+        log.critical(
+            "%s: force-closed untracked exchange position %s %s qty=%.6f",
+            phase,
+            symbol,
+            direction,
+            qty,
+        )
+        return True
+
+    def _increment_metric(self, name: str) -> None:
+        increment = getattr(self.portfolio, "increment_metric", None)
+        if callable(increment):
+            increment(name)
+
+    @staticmethod
+    def _safe_float(value, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+
+    @staticmethod
+    def _safe_bool(value) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        if isinstance(value, (int, float)):
+            return value != 0
+        return False
+
+    @staticmethod
+    def _safe_positive_price(value) -> float | None:
+        parsed = TradingBot._safe_float(value, default=0.0)
+        return parsed if parsed > 0 else None
+
+    def _derive_imported_protection(
+        self,
+        symbol: str,
+        direction: str,
+        entry_price: float,
+    ) -> dict[str, object]:
+        sl_pct = float(os.getenv("STOP_LOSS_PCT", "0.03"))
+        tp_pct = float(os.getenv("TAKE_PROFIT_PCT", "0.06"))
+
+        if not (0 < sl_pct < 0.5):
+            log.warning(
+                "Startup sync [%s]: STOP_LOSS_PCT=%.4f out of range (0, 0.5); using 0.03",
+                symbol,
+                sl_pct,
+            )
+            sl_pct = 0.03
+        if not (0 < tp_pct < 1.0):
+            log.warning(
+                "Startup sync [%s]: TAKE_PROFIT_PCT=%.4f out of range (0, 1.0); using 0.06",
+                symbol,
+                tp_pct,
+            )
+            tp_pct = 0.06
+
+        if direction == "LONG":
+            default_stop = entry_price * (1 - sl_pct)
+            default_tp1 = entry_price * (1 + tp_pct * 0.5)
+            default_tp2 = entry_price * (1 + tp_pct)
+        else:
+            default_stop = entry_price * (1 + sl_pct)
+            default_tp1 = entry_price * (1 - tp_pct * 0.5)
+            default_tp2 = entry_price * (1 - tp_pct)
+
+        fetch_open_orders = getattr(self.executor, "get_open_orders", None)
+        raw_orders = fetch_open_orders(symbol) if callable(fetch_open_orders) else []
+        open_orders = [o for o in (raw_orders or []) if isinstance(o, dict)]
+
+        close_side = "SELL" if direction == "LONG" else "BUY"
+        stop_orders: list[tuple[float, dict]] = []
+        tp_orders: list[tuple[float, dict]] = []
+
+        for order in open_orders:
+            order_side = str(order.get("side", "")).upper()
+            if order_side and order_side != close_side:
+                continue
+
+            reduce_only = self._safe_bool(order.get("reduceOnly")) or self._safe_bool(order.get("closePosition"))
+            if not reduce_only and order_side != close_side:
+                continue
+
+            order_type = str(order.get("type", "")).upper()
+            stop_price = self._safe_positive_price(order.get("stopPrice"))
+            limit_price = self._safe_positive_price(order.get("price"))
+            activation_price = self._safe_positive_price(order.get("activationPrice"))
+
+            if order_type in {"STOP", "STOP_MARKET", "STOP_LOSS", "STOP_LOSS_LIMIT", "TRAILING_STOP_MARKET"}:
+                px = stop_price or activation_price or limit_price
+                if px is not None:
+                    stop_orders.append((px, order))
+                continue
+
+            if order_type in {"TAKE_PROFIT", "TAKE_PROFIT_MARKET", "TAKE_PROFIT_LIMIT"}:
+                px = stop_price or limit_price
+                if px is not None:
+                    tp_orders.append((px, order))
+
+        def _order_id(raw: dict) -> int | str | None:
+            oid = raw.get("orderId")
+            if oid is None:
+                return None
+            try:
+                return int(oid)
+            except Exception:
+                return str(oid)
+
+        selected_stop = None
+        selected_stop_order = None
+        if stop_orders:
+            if direction == "LONG":
+                valid = [(px, order) for px, order in stop_orders if px < entry_price]
+                if valid:
+                    selected_stop, selected_stop_order = max(valid, key=lambda item: item[0])
+                else:
+                    selected_stop, selected_stop_order = min(stop_orders, key=lambda item: abs(item[0] - entry_price))
+            else:
+                valid = [(px, order) for px, order in stop_orders if px > entry_price]
+                if valid:
+                    selected_stop, selected_stop_order = min(valid, key=lambda item: item[0])
+                else:
+                    selected_stop, selected_stop_order = min(stop_orders, key=lambda item: abs(item[0] - entry_price))
+
+        selected_tps: list[tuple[float, dict]] = []
+        if tp_orders:
+            if direction == "LONG":
+                valid_tps = [(px, order) for px, order in tp_orders if px > entry_price]
+                valid_tps.sort(key=lambda item: item[0])
+            else:
+                valid_tps = [(px, order) for px, order in tp_orders if px < entry_price]
+                valid_tps.sort(key=lambda item: item[0], reverse=True)
+
+            if not valid_tps:
+                valid_tps = sorted(tp_orders, key=lambda item: abs(item[0] - entry_price))
+
+            selected_tps = valid_tps[:2]
+
+        stop_loss = selected_stop if selected_stop is not None else default_stop
+
+        if selected_tps:
+            take_profit_1 = selected_tps[0][0]
+            take_profit_2 = selected_tps[1][0] if len(selected_tps) > 1 else default_tp2
+        else:
+            take_profit_1 = default_tp1
+            take_profit_2 = default_tp2
+
+        stop_order_id = _order_id(selected_stop_order) if selected_stop_order else None
+        tp1_order_id = _order_id(selected_tps[0][1]) if selected_tps else None
+        tp2_order_id = _order_id(selected_tps[1][1]) if len(selected_tps) > 1 else None
+
+        has_exchange_stop = stop_order_id is not None
+        has_exchange_tp = tp1_order_id is not None or tp2_order_id is not None
+        if has_exchange_stop and has_exchange_tp:
+            protection_source = "exchange"
+        elif has_exchange_stop or has_exchange_tp:
+            protection_source = "mixed"
+        else:
+            protection_source = "synthetic"
+
+        return {
+            "stop_loss": float(stop_loss),
+            "take_profit_1": float(take_profit_1),
+            "take_profit_2": float(take_profit_2),
+            "sl_order_id": stop_order_id,
+            "tp1_order_id": tp1_order_id,
+            "tp2_order_id": tp2_order_id,
+            "protection_source": protection_source,
+        }
 
     def _import_exchange_position(self, pos: dict) -> bool:
         symbol = pos["symbol"]
@@ -166,24 +426,23 @@ class TradingBot:
             log.warning("Startup sync: could not infer entry price for %s; skipping import", symbol)
             return False
 
-        sl_pct = float(os.getenv("STOP_LOSS_PCT", "0.03"))
-        tp_pct = float(os.getenv("TAKE_PROFIT_PCT", "0.06"))
+        protection = self._derive_imported_protection(
+            symbol=symbol,
+            direction=direction,
+            entry_price=entry_price,
+        )
 
-        if direction == "LONG":
-            stop_loss = entry_price * (1 - sl_pct)
-            take_profit_1 = entry_price * (1 + tp_pct * 0.5)
-            take_profit_2 = entry_price * (1 + tp_pct)
-        else:
-            stop_loss = entry_price * (1 + sl_pct)
-            take_profit_1 = entry_price * (1 - tp_pct * 0.5)
-            take_profit_2 = entry_price * (1 - tp_pct)
+        stop_loss = float(protection["stop_loss"])
+        take_profit_1 = float(protection["take_profit_1"])
+        take_profit_2 = float(protection["take_profit_2"])
+        protection_source = str(protection["protection_source"])
 
         leverage = max(1, int(float(pos.get("leverage", 1) or 1)))
         notional = abs(float(pos.get("notional", 0) or 0))
         if notional <= 0:
             notional = quantity * entry_price
 
-        risk_usdt = abs(entry_price - stop_loss) * quantity / leverage
+        risk_usdt = abs(entry_price - stop_loss) * quantity
 
         self.portfolio.open_positions[symbol] = {
             "id": f"{symbol}_sync_{int(time.time())}",
@@ -205,18 +464,30 @@ class TradingBot:
             "status": "SYNCED_OPEN",
             "tp1_hit": False,
             "leverage": leverage,
+            "protection_source": protection_source,
+            "unprotected_sync": protection_source == "synthetic",
             "order_ids": {
                 "entry": "SYNC_IMPORT",
-                "sl": None,
-                "tp1": None,
-                "tp2": None,
+                "sl": protection["sl_order_id"],
+                "tp1": protection["tp1_order_id"],
+                "tp2": protection["tp2_order_id"],
             },
         }
+
+        if protection_source != "exchange":
+            self._increment_metric("import_unprotected_sync")
+            log.warning(
+                "Startup sync: %s imported with %s protection source",
+                symbol,
+                protection_source,
+            )
+
         log.warning(
-            "Startup sync: imported exchange position %s %s qty=%s",
+            "Startup sync: imported exchange position %s %s qty=%s (protection=%s)",
             symbol,
             direction,
             quantity,
+            protection_source,
         )
         return True
 
@@ -246,9 +517,31 @@ class TradingBot:
             local["entry_price"] = remote_entry
             changed = True
 
+        remote_notional = abs(float(remote.get("notional", 0) or 0))
+        if remote_notional > 0:
+            local_notional = abs(float(local.get("notional", 0) or 0))
+            if local_notional <= 0 or abs(local_notional - remote_notional) / remote_notional > 0.01:
+                local["notional"] = remote_notional
+                changed = True
+
         if changed:
-            log.warning("Startup sync: aligned local position %s with exchange state", symbol)
+            self._refresh_local_position_risk(local)
+            log.warning("Position sync: aligned local position %s with exchange state", symbol)
         return changed
+
+    @staticmethod
+    def _refresh_local_position_risk(local: dict) -> None:
+        try:
+            entry = float(local.get("entry_price", 0.0) or 0.0)
+            stop = float(local.get("stop_loss", 0.0) or 0.0)
+            qty = abs(float(local.get("quantity", 0.0) or 0.0))
+        except Exception:
+            return
+
+        if entry <= 0 or stop <= 0 or qty <= 0:
+            return
+
+        local["risk_usdt"] = abs(entry - stop) * qty
 
     def _sync_balance_from_exchange(self) -> None:
         if self.dry_run:
@@ -262,7 +555,9 @@ class TradingBot:
 
         wallet_balance = float(balance_info.get("wallet_balance", 0.0))
         available_balance = float(balance_info.get("available_balance", wallet_balance))
-        sync_balance = available_balance if available_balance > 0 else wallet_balance
+        # Available balance excludes margin locked in open futures positions.
+        # Use wallet balance as the strategy equity baseline.
+        sync_balance = wallet_balance if wallet_balance > 0 else available_balance
         if sync_balance <= 0:
             log.warning(
                 "Startup balance sync: non-positive balance for %s (wallet=%.4f available=%.4f)",
@@ -379,11 +674,18 @@ class TradingBot:
                 self.executor.cancel_order(symbol, oid)
 
     def run_cycle(self) -> None:
-        # First manage any existing open positions.
+        self.run_position_management()
+        self.run_signal_scan()
+
+    def run_position_management(self) -> None:
+        """Process local position stop/targets check and runtime/UI dashboard commands."""
         self.monitor.check_all()
         self._process_runtime_commands()
         self._refresh_runtime_state()
+        self._run_periodic_reconciliation_if_due()
 
+    def run_signal_scan(self) -> None:
+        """Scan eligible symbols for new trading signals, size positions, and execute entries."""
         primary_tf = CONFIG.strategy.primary_tf
         htf_1 = CONFIG.strategy.htf_1
         htf_2 = CONFIG.strategy.htf_2
@@ -623,21 +925,57 @@ class TradingBot:
                 "rejection_reason": f"insufficient_{primary_tf}_data({observed}<120)",
             }
 
+        align_to_new_candle = bool(getattr(CONFIG.strategy, "align_signal_to_new_candle", True))
+        signal_bar_close = self._signal_bar_close_epoch(df)
+        if align_to_new_candle and signal_bar_close is not None:
+            last_evaluated = self._last_evaluated_signal_bar_close.get(symbol)
+            if last_evaluated is not None and signal_bar_close <= last_evaluated:
+                return {
+                    "symbol": symbol,
+                    "rejection_reason": "same_bar_already_evaluated",
+                }
+
         strategy = self.strategy_cls()
-        signal = strategy.generate(
-            symbol=symbol,
-            df=df,
-            htf_df=multi_tf.get(htf_1),
-            htf_df2=multi_tf.get(htf_2),
-        )
+        if isinstance(strategy, EnsembleStrategy):
+            signal = strategy.generate(
+                symbol=symbol,
+                df=df,
+                htf_df=multi_tf.get(htf_1),
+                htf_df2=multi_tf.get(htf_2),
+                no_signal_streak=int(self._no_signal_streaks.get(symbol, 0)),
+            )
+        else:
+            signal = strategy.generate(
+                symbol=symbol,
+                df=df,
+                htf_df=multi_tf.get(htf_1),
+                htf_df2=multi_tf.get(htf_2),
+            )
+
+        if signal_bar_close is not None:
+            self._last_evaluated_signal_bar_close[symbol] = signal_bar_close
+
         if signal is None:
             skip_reason = str(getattr(strategy, "last_skip_reason", "")).strip()
+            if skip_reason.startswith("no_substrategy_signal"):
+                self._no_signal_streaks[symbol] = int(self._no_signal_streaks.get(symbol, 0)) + 1
+            elif skip_reason != "same_bar_already_evaluated":
+                self._no_signal_streaks[symbol] = 0
             return {
                 "symbol": symbol,
                 "rejection_reason": skip_reason or "strategy_no_signal",
             }
 
-        rejection_reason = self._signal_rejection_reason(signal, min_confidence)
+        self._no_signal_streaks[symbol] = 0
+
+        effective_min_confidence = float(min_confidence)
+        if bool((signal.extra or {}).get("fallback_activated")):
+            relax = float(
+                getattr(CONFIG.strategy, "no_signal_fallback_confidence_relaxation", 0.05)
+            )
+            effective_min_confidence = max(0.0, effective_min_confidence - max(0.0, relax))
+
+        rejection_reason = self._signal_rejection_reason(signal, effective_min_confidence)
         if rejection_reason:
             log.info(
                 "[%s] signal rejected | conf=%.2f | rr=%.2f | reason=%s",
@@ -656,6 +994,36 @@ class TradingBot:
             "signal": signal,
             "df": df,
         }
+
+    @staticmethod
+    def _signal_bar_close_epoch(df) -> float | None:
+        if df is None or len(df) < 2:
+            return None
+
+        close_series = None
+        if hasattr(df, "columns") and "close_time" in df.columns:
+            close_series = df["close_time"]
+        elif hasattr(df, "index"):
+            close_series = df.index
+
+        if close_series is None or len(close_series) < 2:
+            return None
+
+        raw_value = close_series.iloc[-2] if hasattr(close_series, "iloc") else close_series[-2]
+        return TradingBot._as_epoch_seconds(raw_value)
+
+    @staticmethod
+    def _as_epoch_seconds(value) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value.timestamp())
+        except Exception:
+            pass
+        try:
+            return float(value)
+        except Exception:
+            return None
 
     def _signal_is_tradeable(self, signal, min_confidence: float) -> bool:
         return self._signal_rejection_reason(signal, min_confidence) is None
@@ -874,23 +1242,50 @@ def main() -> None:
 
     cycle = 0
     try:
-        while True:
-            if shutdown_state["requested"]:
-                break
+        if cycle_target > 0:
+            while cycle < cycle_target:
+                if shutdown_state["requested"]:
+                    break
+                cycle += 1
+                log.info("Starting cycle %s", cycle)
+                bot.run_cycle()
+        else:
+            # Continuous mode: run position checks frequently, and signal scans every analysis_interval
+            last_position_check = 0.0
+            last_signal_scan = 0.0
+            position_check_interval = max(
+                2.0,
+                float(getattr(CONFIG.trading, "position_check_interval_seconds", 30.0)),
+            )
+            analysis_interval = max(5, args.analysis_interval)
 
-            cycle += 1
-            log.info("Starting cycle %s", cycle)
-            bot.run_cycle()
+            while True:
+                if shutdown_state["requested"]:
+                    break
 
-            if cycle_target > 0 and cycle >= cycle_target:
-                break
+                now = time.time()
 
-            if shutdown_state["requested"]:
-                break
+                # 1. Run position check if interval has elapsed
+                if now - last_position_check >= position_check_interval:
+                    log.info("Running position management check")
+                    bot.run_position_management()
+                    last_position_check = time.time()
 
-            sleep_for = max(5, args.analysis_interval)
-            log.info("Sleeping %ss before next cycle", sleep_for)
-            time.sleep(sleep_for)
+                if shutdown_state["requested"]:
+                    break
+
+                # 2. Run signal scan if interval has elapsed
+                if now - last_signal_scan >= analysis_interval:
+                    cycle += 1
+                    log.info("Starting signal scan cycle %s", cycle)
+                    bot.run_signal_scan()
+                    last_signal_scan = time.time()
+
+                if shutdown_state["requested"]:
+                    break
+
+                # Sleep in short increments to allow responsiveness to shutdown signals
+                time.sleep(1.0)
     except KeyboardInterrupt:
         _request_shutdown("keyboard_interrupt")
 

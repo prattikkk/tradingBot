@@ -177,6 +177,7 @@ class Backtest:
             else float(CONFIG.trading.backtest_max_hold_hours)
         )
         self.max_hold_bars = self._bars_from_hours(hold_hours)
+        self._tie_events = 0
 
     def run(self) -> dict:
         log.info(f"Fetching {self.days}d of {self.symbol} {self.interval} candles…")
@@ -184,6 +185,8 @@ class Backtest:
         if df.empty or len(df) < 100:
             log.error("Not enough data")
             return {}
+
+        self._tie_events = 0
 
         log.info(f"Got {len(df)} candles. Running backtest…")
 
@@ -290,6 +293,7 @@ class Backtest:
 
                 if not tp1_hit:
                     if sl_hit and tp1_now and self.conservative_ohlc_path:
+                        self._tie_events += 1
                         return self._finalize_exit(
                             direction=direction,
                             entry=entry,
@@ -315,13 +319,15 @@ class Backtest:
                         )
                     if tp1_now:
                         tp1_fill = self._apply_exit_cost(tp1, direction, is_stop=False)
-                        partial_pnl = (tp1_fill - entry) * qty * 0.5
-                        qty *= 0.5
+                        partial_qty_pct = float(CONFIG.risk.partial_exit_pct)
+                        partial_pnl = (tp1_fill - entry) * qty * partial_qty_pct
+                        qty *= partial_qty_pct
                         tp1_hit = True
 
                 tp2_now = high >= tp2
                 sl_hit = low <= sl
                 if sl_hit and tp2_now and self.conservative_ohlc_path:
+                    self._tie_events += 1
                     return self._finalize_exit(
                         direction=direction,
                         entry=entry,
@@ -364,6 +370,7 @@ class Backtest:
 
                 if not tp1_hit:
                     if sl_hit and tp1_now and self.conservative_ohlc_path:
+                        self._tie_events += 1
                         return self._finalize_exit(
                             direction=direction,
                             entry=entry,
@@ -389,13 +396,15 @@ class Backtest:
                         )
                     if tp1_now:
                         tp1_fill = self._apply_exit_cost(tp1, direction, is_stop=False)
-                        partial_pnl = (entry - tp1_fill) * qty * 0.5
-                        qty *= 0.5
+                        partial_qty_pct = float(CONFIG.risk.partial_exit_pct)
+                        partial_pnl = (entry - tp1_fill) * qty * partial_qty_pct
+                        qty *= partial_qty_pct
                         tp1_hit = True
 
                 tp2_now = low <= tp2
                 sl_hit = high >= sl
                 if sl_hit and tp2_now and self.conservative_ohlc_path:
+                    self._tie_events += 1
                     return self._finalize_exit(
                         direction=direction,
                         entry=entry,
@@ -484,6 +493,7 @@ class Backtest:
             "tp2_rate":      round(len(tdf[tdf["reason"]=="TP2"]) / len(tdf) * 100, 1),
             "sl_rate":       round(len(tdf[tdf["reason"]=="SL"]) / len(tdf) * 100, 1),
             "liquidation_rate": round(len(tdf[tdf["reason"]=="LIQUIDATION"]) / len(tdf) * 100, 1),
+            "tie_events": int(self._tie_events),
         }
 
         # Print
@@ -563,7 +573,8 @@ class Backtest:
     def _slice_htf_window(htf_df: pd.DataFrame | None, end_time: pd.Timestamp) -> pd.DataFrame | None:
         if htf_df is None:
             return None
-        window = htf_df.loc[htf_df.index <= end_time]
+        idx = htf_df.index.searchsorted(end_time, side="right")
+        window = htf_df.iloc[:idx]
         return window if not window.empty else None
 
     def _fee_rate(self) -> float:

@@ -10,7 +10,7 @@ import time
 import math
 import os
 import requests
-from typing import Optional
+from typing import Optional, Any
 from urllib.parse import urlencode
 
 from core.resilience import CircuitBreaker, TokenBucketLimiter, retry_delay_seconds
@@ -54,6 +54,10 @@ class TestnetExecutor:
         self._retry_attempts = api_cfg.retry_attempts
         self._backoff_base = api_cfg.backoff_base_seconds
         self._backoff_cap = api_cfg.backoff_cap_seconds
+        self._last_api_error_code: Optional[int] = None
+        self._last_api_error_status: Optional[int] = None
+        self._last_api_error_path: str = ""
+        self._last_api_error_message: str = ""
 
     # ------------------------------------------------------------------ #
     # Public methods
@@ -70,6 +74,15 @@ class TestnetExecutor:
         """
         side       = "BUY"  if pos.direction == Direction.LONG  else "SELL"
         close_side = "SELL" if pos.direction == Direction.LONG  else "BUY"
+        use_exchange_protection = bool(getattr(CONFIG.trading, "exchange_protective_orders", False))
+        strict_protection_required = bool(getattr(CONFIG.trading, "strict_protection_required", False))
+
+        if strict_protection_required and not use_exchange_protection:
+            log.error(
+                "Strict protection is enabled but exchange protective orders are disabled; skipping %s",
+                pos.symbol,
+            )
+            return {}
 
         # 1. Set leverage
         self._set_leverage(pos.symbol, pos.leverage)
@@ -82,10 +95,12 @@ class TestnetExecutor:
             quantity=pos.quantity,
         )
         if not entry_order:
-            log.error(f"Entry order failed for {pos.symbol}")
+            if self._last_api_error_code == -2019:
+                log.warning("Entry order skipped for %s: insufficient margin", pos.symbol)
+            else:
+                log.error("Entry order failed for %s", pos.symbol)
             return {}
 
-        use_exchange_protection = bool(getattr(CONFIG.trading, "exchange_protective_orders", False))
         if not use_exchange_protection:
             ids = {
                 "entry": entry_order.get("orderId"),
@@ -126,7 +141,44 @@ class TestnetExecutor:
             trigger_price=self._tick_round(pos.take_profit_2, pos.symbol),
         )
 
-        if not sl_order or not tp1_order or not tp2_order:
+        sl_id = self._extract_protective_id(sl_order)
+        tp1_id = self._extract_protective_id(tp1_order)
+        tp2_id = self._extract_protective_id(tp2_order)
+        protective_ids = [sl_id, tp1_id, tp2_id]
+
+        protection_incomplete = (not sl_order or not tp1_order or not tp2_order)
+        if not protection_incomplete:
+            protection_incomplete = any(order_id is None for order_id in protective_ids)
+
+        require_confirmed_ids = bool(
+            getattr(CONFIG.trading, "strict_protection_require_confirmed_ids", True)
+        )
+        if strict_protection_required and require_confirmed_ids and not protection_incomplete:
+            # A pending client ID is only an async acknowledgement, not proof the
+            # protective order is live on exchange.
+            protection_incomplete = any(
+                isinstance(order_id, str) and order_id.startswith("pending:")
+                for order_id in protective_ids
+            )
+
+        if protection_incomplete:
+            if strict_protection_required:
+                log.error(
+                    "[%s] protective orders incomplete or unconfirmed; flattening entry because strict protection is enabled",
+                    pos.symbol,
+                )
+                self._cancel_protective_candidate(pos.symbol, sl_order)
+                self._cancel_protective_candidate(pos.symbol, tp1_order)
+                self._cancel_protective_candidate(pos.symbol, tp2_order)
+
+                flattened = self.close_position_market(pos.symbol, pos.direction, pos.quantity)
+                if not flattened:
+                    log.error(
+                        "[%s] failed to flatten unprotected entry after protection failure",
+                        pos.symbol,
+                    )
+                return {}
+
             log.warning(
                 "[%s] protective orders incomplete (SL/TP); using client-side protection fallback",
                 pos.symbol,
@@ -141,9 +193,9 @@ class TestnetExecutor:
 
         ids = {
             "entry": entry_order.get("orderId"),
-            "sl":    self._extract_protective_id(sl_order),
-            "tp1":   self._extract_protective_id(tp1_order),
-            "tp2":   self._extract_protective_id(tp2_order),
+            "sl":    sl_id,
+            "tp1":   tp1_id,
+            "tp2":   tp2_id,
         }
         log.info("Orders placed [%s]: %s", pos.symbol, ids)
         return ids
@@ -152,6 +204,7 @@ class TestnetExecutor:
         order_ref = str(order_id)
         if order_ref.startswith("pending:"):
             # Async-accepted algo orders may not return immediate server IDs.
+            log.debug("[%s] best-effort cancel for unconfirmed protective id %s", symbol, order_ref)
             return True
 
         if order_ref.startswith("algo:"):
@@ -249,6 +302,22 @@ class TestnetExecutor:
 
         return positions
 
+    def get_open_orders(self, symbol: str) -> list[dict]:
+        """Return open orders for a symbol (best-effort, empty list on failure)."""
+        resp = self._signed_get("/fapi/v1/openOrders", {"symbol": symbol})
+        if resp is None:
+            return []
+
+        payload = resp
+        if isinstance(resp, dict) and "data" in resp:
+            payload = resp.get("data")
+
+        if isinstance(payload, list):
+            return [row for row in payload if isinstance(row, dict)]
+        if isinstance(payload, dict):
+            return [payload]
+        return []
+
     def place_stop_loss(
         self,
         symbol: str,
@@ -286,7 +355,16 @@ class TestnetExecutor:
             side=close_side,
             order_type="MARKET",
             quantity=quantity,
+            reduce_only=True,
         )
+        if close_order is None:
+            # Some account modes can reject reduceOnly on market close.
+            close_order = self._place_order(
+                symbol=symbol,
+                side=close_side,
+                order_type="MARKET",
+                quantity=quantity,
+            )
         return close_order is not None
 
     def place_trailing_stop(
@@ -299,7 +377,7 @@ class TestnetExecutor:
     ) -> Optional[str | int]:
         """Create exchange-side trailing stop to protect the remaining position."""
         if not self.has_credentials:
-            return "DRY_RUN"
+            return None
 
         qty = self._round_qty(quantity, symbol)
         if qty <= 0:
@@ -343,6 +421,7 @@ class TestnetExecutor:
         stop_price: Optional[float] = None,
         price: Optional[float] = None,
         close_position: bool = False,
+        reduce_only: bool = False,
     ) -> Optional[dict]:
         params: dict = {
             "symbol":   symbol,
@@ -350,6 +429,8 @@ class TestnetExecutor:
             "type":     order_type,
             "quantity": quantity,
         }
+        if reduce_only:
+            params["reduceOnly"] = "true"
         if stop_price:
             params["stopPrice"] = stop_price
         if price:
@@ -378,6 +459,7 @@ class TestnetExecutor:
         """Place protective conditional order via UM algo endpoint."""
         qty = self._round_qty(quantity, symbol)
         if qty <= 0:
+            log.debug("[%s] protective order qty rounded to zero: %.6f -> %.6f", symbol, quantity, qty)
             return None
 
         client_id = f"ab_{int(time.time() * 1000)}"
@@ -446,6 +528,12 @@ class TestnetExecutor:
             return order["orderId"]
         return None
 
+    def _cancel_protective_candidate(self, symbol: str, order: Optional[dict]) -> None:
+        order_ref = self._extract_protective_id(order)
+        if not order_ref:
+            return
+        self.cancel_order(symbol, order_ref)
+
     def _signed_post(self, path: str, params: dict) -> Optional[dict]:
         return self._signed_request("POST", path, params, TESTNET_BASE)
 
@@ -477,6 +565,8 @@ class TestnetExecutor:
             log.warning("Circuit open for %s; skipping request", endpoint_key)
             return None
 
+        self._reset_last_api_error()
+
         url = f"{base_url}{path}"
         retryable_status = {418, 429, 500, 502, 503, 504}
 
@@ -500,6 +590,7 @@ class TestnetExecutor:
 
                 if resp.status_code in (200, 201, 202):
                     self._circuit_breaker.record_success(endpoint_key)
+                    self._reset_last_api_error()
                     try:
                         data = resp.json()
                         if isinstance(data, dict):
@@ -510,7 +601,13 @@ class TestnetExecutor:
                             return {"accepted": True}
                         return {}
 
-                self._circuit_breaker.record_failure(endpoint_key)
+                error_code, text = self._parse_api_error(resp)
+
+                # Margin insufficiency is a business rejection, not a transport failure.
+                # Keep processing the remaining symbols instead of opening the shared circuit.
+                if error_code != -2019:
+                    self._circuit_breaker.record_failure(endpoint_key)
+
                 if (
                     resp.status_code in retryable_status
                     and attempt < self._retry_attempts
@@ -519,13 +616,19 @@ class TestnetExecutor:
                     time.sleep(retry_delay_seconds(attempt, self._backoff_base, self._backoff_cap))
                     continue
 
-                text = resp.text[:200].replace("\n", " ") if resp.text else ""
-                log.error(
-                    f"API {method} {base_url}{path} -> {resp.status_code}: {text}"
+                self._record_last_api_error(path, resp.status_code, error_code, text)
+                self._log_api_http_failure(
+                    method,
+                    path,
+                    base_url,
+                    resp.status_code,
+                    error_code,
+                    text,
                 )
                 return None
             except Exception as e:
                 self._circuit_breaker.record_failure(endpoint_key)
+                self._record_last_api_error(path, None, None, str(e))
                 if attempt < self._retry_attempts and self._is_retryable_request(method, path):
                     time.sleep(retry_delay_seconds(attempt, self._backoff_base, self._backoff_cap))
                     continue
@@ -533,6 +636,63 @@ class TestnetExecutor:
                 return None
 
         return None
+
+    def _record_last_api_error(
+        self,
+        path: str,
+        status_code: Optional[int],
+        error_code: Optional[int],
+        message: str,
+    ) -> None:
+        self._last_api_error_path = path
+        self._last_api_error_status = status_code
+        self._last_api_error_code = error_code
+        self._last_api_error_message = message
+
+    def _reset_last_api_error(self) -> None:
+        self._last_api_error_path = ""
+        self._last_api_error_status = None
+        self._last_api_error_code = None
+        self._last_api_error_message = ""
+
+    @staticmethod
+    def _parse_api_error(resp: requests.Response) -> tuple[Optional[int], str]:
+        text = resp.text[:200].replace("\n", " ") if resp.text else ""
+        try:
+            data: Any = resp.json()
+        except Exception:
+            return None, text
+
+        if not isinstance(data, dict):
+            return None, text
+
+        raw_code = data.get("code")
+        try:
+            code = int(raw_code)
+        except (TypeError, ValueError):
+            code = None
+        return code, text
+
+    def _log_api_http_failure(
+        self,
+        method: str,
+        path: str,
+        base_url: str,
+        status_code: int,
+        error_code: Optional[int],
+        text: str,
+    ) -> None:
+        message = f"API {method} {base_url}{path} -> {status_code}: {text}"
+        if error_code == -2019:
+            log.warning("%s [insufficient margin]", message)
+            return
+        if error_code == -4120:
+            log.info("%s [unsupported endpoint for this order type]", message)
+            return
+        if error_code == -1021:
+            log.warning("%s [timestamp outside recvWindow]", message)
+            return
+        log.error(message)
 
     @staticmethod
     def _is_long(direction: Direction | str) -> bool:

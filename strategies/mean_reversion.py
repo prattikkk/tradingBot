@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from config import CONFIG
+from core.calibration import SYMBOL_CALIBRATION
 from core.indicators import atr, bollinger_bands, ema, pivot_points, stochastic, volume_profile
 from core.signal import Direction, Signal
 from utils.logger import get_logger
@@ -66,6 +67,13 @@ class MeanReversionStrategy:
         curr_vol = rel_vol.iloc[signal_idx]
         curr_atr = atr_vals.iloc[signal_idx]
 
+        vol_ratio_max = float(SYMBOL_CALIBRATION.get(symbol, "mean_reversion_vol_ratio_max", 1.05))
+        width_pct_max = float(SYMBOL_CALIBRATION.get(symbol, "mean_reversion_width_pct_max", 0.60))
+        stoch_oversold_k = float(SYMBOL_CALIBRATION.get(symbol, "mean_reversion_stoch_oversold_k", 22.0))
+        stoch_oversold_d = float(SYMBOL_CALIBRATION.get(symbol, "mean_reversion_stoch_oversold_d", 28.0))
+        stoch_overbought_k = float(SYMBOL_CALIBRATION.get(symbol, "mean_reversion_stoch_overbought_k", 78.0))
+        stoch_overbought_d = float(SYMBOL_CALIBRATION.get(symbol, "mean_reversion_stoch_overbought_d", 72.0))
+
         if (
             np.isnan(curr_upper)
             or np.isnan(curr_mid)
@@ -79,19 +87,19 @@ class MeanReversionStrategy:
             return None
 
         # Mean reversion works best in quieter tape; avoid high-volume expansion bars.
-        if curr_vol > 1.05:
+        if curr_vol > vol_ratio_max:
             return None
 
         bb_width = ((bb_upper - bb_lower) / bb_mid.replace(0, np.nan)).rolling(80).rank(pct=True)
         width_pct = bb_width.iloc[signal_idx]
-        if np.isnan(width_pct) or width_pct > 0.60:
+        if np.isnan(width_pct) or width_pct > width_pct_max:
             return None
 
         touch_lower = curr_price <= curr_lower * 1.002
         touch_upper = curr_price >= curr_upper * 0.998
 
-        stoch_oversold = curr_k <= 22 and curr_d <= 28
-        stoch_overbought = curr_k >= 78 and curr_d >= 72
+        stoch_oversold = curr_k <= stoch_oversold_k and curr_d <= stoch_oversold_d
+        stoch_overbought = curr_k >= stoch_overbought_k and curr_d >= stoch_overbought_d
         stoch_bull_turn = prev_k <= prev_d and curr_k > curr_d
         stoch_bear_turn = prev_k >= prev_d and curr_k < curr_d
 

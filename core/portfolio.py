@@ -4,6 +4,7 @@ In-memory portfolio for paper trading P&L tracking.
 """
 from __future__ import annotations
 import json
+import os
 import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -47,6 +48,7 @@ class Portfolio:
         self._balance: float = CONFIG.risk.initial_capital
         self.open_positions: dict[str, dict] = {}   # symbol → position dict
         self.closed_trades: list[dict] = []
+        self.telemetry: dict[str, int] = {}
         self._load()
 
     # ------------------------------------------------------------------ #
@@ -81,6 +83,22 @@ class Portfolio:
             old_balance,
             self._balance,
         )
+
+    def equity(self) -> float:
+        return float(self._balance)
+
+    def increment_metric(self, name: str, amount: int = 1, persist: bool = False) -> int:
+        key = str(name).strip()
+        if not key:
+            return 0
+
+        current = int(self.telemetry.get(key, 0))
+        updated = current + int(amount)
+        self.telemetry[key] = updated
+
+        if persist:
+            self._save()
+        return updated
 
     # ------------------------------------------------------------------ #
     # Position management
@@ -125,6 +143,13 @@ class Portfolio:
         pos["quantity"] -= qty_exit
         pos["status"] = "TP1_HIT"
         pos["pnl"] = pos.get("pnl", 0) + pnl
+
+        try:
+            risk_per_unit = abs(float(pos.get("entry_price", 0.0)) - float(pos.get("stop_loss", 0.0)))
+            pos["risk_usdt"] = max(0.0, float(pos.get("quantity", 0.0)) * risk_per_unit)
+        except Exception:
+            pass
+
         self._balance += pnl
         self._save()
         log.info(f"🎯 TP1 hit [{symbol}] | pnl=${pnl:+.2f} | remaining qty={pos['quantity']:.4f}")
@@ -173,7 +198,8 @@ class Portfolio:
 
         avg_win  = sum(wins) / len(wins) if wins else 0
         avg_loss = sum(losses) / len(losses) if losses else 0
-        profit_factor = abs(sum(wins) / sum(losses)) if losses else float("inf")
+        loss_sum = sum(losses)
+        profit_factor = abs(sum(wins) / loss_sum) if loss_sum != 0 else float("inf")
 
         return {
             "trades": len(pnls),
@@ -196,13 +222,24 @@ class Portfolio:
 
     def _save(self):
         self.DATA_FILE.parent.mkdir(exist_ok=True)
-        with open(self.DATA_FILE, "w") as f:
-            json.dump({
-                "balance": self._balance,
-                "total_capital": self.total_capital,
-                "open_positions": self.open_positions,
-                "closed_trades": self.closed_trades,
-            }, f, indent=2, default=str)
+        tmp_file = self.DATA_FILE.with_suffix(".tmp")
+        try:
+            with open(tmp_file, "w") as f:
+                json.dump({
+                    "balance": self._balance,
+                    "total_capital": self.total_capital,
+                    "telemetry": self.telemetry,
+                    "open_positions": self.open_positions,
+                    "closed_trades": self.closed_trades,
+                }, f, indent=2, default=str)
+            os.replace(tmp_file, self.DATA_FILE)
+        except Exception as e:
+            log.error(f"Portfolio save failed: {e}")
+            if tmp_file.exists():
+                try:
+                    tmp_file.unlink()
+                except Exception:
+                    pass
 
     def _load(self):
         if not self.DATA_FILE.exists():
@@ -212,6 +249,8 @@ class Portfolio:
                 data = json.load(f)
             self._balance        = data.get("balance", self._balance)
             self.total_capital   = data.get("total_capital", self.total_capital)
+            telemetry = data.get("telemetry", {})
+            self.telemetry      = dict(telemetry) if isinstance(telemetry, dict) else {}
             self.open_positions  = data.get("open_positions", {})
             self.closed_trades   = data.get("closed_trades", [])
             log.info(f"📊 Loaded portfolio | balance=${self._balance:.2f} | "

@@ -97,4 +97,6 @@ class CircuitBreaker:
 
 def retry_delay_seconds(attempt: int, base: float, cap: float) -> float:
     """Exponential backoff with bounded ceiling."""
-    return min(max(base, 0.0) * (2 ** max(0, attempt)), max(cap, base))
+    base = max(base, 0.0)
+    cap = max(cap, base)
+    return min(base * (2 ** min(max(0, attempt), 30)), cap)

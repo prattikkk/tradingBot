@@ -12,6 +12,7 @@ import pandas as pd
 
 from core.regime import MarketRegime, detect_market_regime
 from core.signal import Signal, Direction
+from core.calibration import SYMBOL_CALIBRATION
 from strategies.supertrend_rsi import SuperTrendRSIStrategy
 from strategies.ema_adx_volume import EMAAdxVolumeStrategy
 from strategies.breakout_momentum import BreakoutMomentumStrategy
@@ -60,7 +61,91 @@ class EnsembleStrategy:
 
     @staticmethod
     def _min_agree(runnable_count: int) -> int:
-        return max(1, int(runnable_count) - 1)
+        return max(1, int(runnable_count) - 2)
+
+    @staticmethod
+    def _regime_settings(symbol: str) -> tuple[float, int, float]:
+        return (
+            float(
+                SYMBOL_CALIBRATION.get(
+                    symbol,
+                    "regime_adx_trending",
+                    CONFIG.strategy.regime_adx_trending,
+                )
+            ),
+            int(
+                SYMBOL_CALIBRATION.get(
+                    symbol,
+                    "regime_vol_window",
+                    CONFIG.strategy.regime_vol_window,
+                )
+            ),
+            float(
+                SYMBOL_CALIBRATION.get(
+                    symbol,
+                    "regime_high_vol_quantile",
+                    CONFIG.strategy.regime_high_vol_quantile,
+                )
+            ),
+        )
+
+    @staticmethod
+    def _fallback_streak_threshold(symbol: str) -> int:
+        default_cycles = int(getattr(CONFIG.strategy, "no_signal_fallback_cycles", 3))
+        return max(1, int(SYMBOL_CALIBRATION.get(symbol, "fallback_no_signal_cycles", default_cycles)))
+
+    def _fallback_signal(
+        self,
+        symbol: str,
+        regime: MarketRegime,
+        df: pd.DataFrame,
+        htf_df: Optional[pd.DataFrame],
+        htf_df2: Optional[pd.DataFrame],
+        no_signal_streak: int,
+    ) -> Optional[Signal]:
+        expand_allowlist = bool(SYMBOL_CALIBRATION.get(symbol, "fallback_expand_allowlist", True))
+        if expand_allowlist:
+            candidates_pool = list(self._strategies)
+        else:
+            allowed = REGIME_ALLOWLIST.get(regime, set(WEIGHTS.keys()))
+            candidates_pool = [s for s in self._strategies if s.name in allowed]
+
+        fallback_candidates: list[Signal] = []
+        for strat in candidates_pool:
+            sig = strat.generate(symbol, df, htf_df, htf_df2)
+            if sig is not None and sig.direction != Direction.FLAT:
+                fallback_candidates.append(sig)
+
+        if not fallback_candidates:
+            return None
+
+        selected = max(fallback_candidates, key=lambda s: s.confidence)
+        confidence_scale = float(SYMBOL_CALIBRATION.get(symbol, "fallback_confidence_scale", 0.95))
+        scaled_confidence = max(0.0, min(1.0, selected.confidence * confidence_scale))
+
+        return Signal(
+            symbol=symbol,
+            direction=selected.direction,
+            confidence=round(scaled_confidence, 3),
+            strategy=self.name,
+            entry_price=selected.entry_price,
+            stop_loss=selected.stop_loss,
+            take_profit_1=selected.take_profit_1,
+            take_profit_2=selected.take_profit_2,
+            atr=selected.atr,
+            reason=(
+                f"Regime={regime.value} | Fallback[{selected.strategy}] "
+                f"streak={no_signal_streak}"
+            ),
+            htf_bias=selected.htf_bias,
+            extra={
+                **(selected.extra or {}),
+                "regime": regime.value,
+                "fallback_activated": True,
+                "fallback_source": selected.strategy,
+                "fallback_streak": int(no_signal_streak),
+            },
+        )
 
     def generate(
         self,
@@ -68,15 +153,18 @@ class EnsembleStrategy:
         df: pd.DataFrame,
         htf_df: Optional[pd.DataFrame] = None,
         htf_df2: Optional[pd.DataFrame] = None,
+        no_signal_streak: int = 0,
     ) -> Optional[Signal]:
         self.last_skip_reason = ""
+
+        trend_adx_threshold, vol_window, high_vol_quantile = self._regime_settings(symbol)
 
         regime = detect_market_regime(
             df,
             adx_period=CONFIG.strategy.adx_period,
-            trend_adx_threshold=CONFIG.strategy.regime_adx_trending,
-            vol_window=CONFIG.strategy.regime_vol_window,
-            high_vol_quantile=CONFIG.strategy.regime_high_vol_quantile,
+            trend_adx_threshold=trend_adx_threshold,
+            vol_window=vol_window,
+            high_vol_quantile=high_vol_quantile,
         )
         allowed = REGIME_ALLOWLIST.get(regime, set(WEIGHTS.keys()))
         runnable = [s for s in self._strategies if s.name in allowed]
@@ -93,6 +181,19 @@ class EnsembleStrategy:
                 log.debug(f"  [{symbol}] {strat.name}: {sig.direction.value} conf={sig.confidence:.0%}")
 
         if not signals:
+            fallback_enabled = bool(getattr(CONFIG.strategy, "no_signal_fallback_enabled", True))
+            threshold = self._fallback_streak_threshold(symbol)
+            if fallback_enabled and no_signal_streak >= threshold:
+                fallback = self._fallback_signal(
+                    symbol,
+                    regime,
+                    df,
+                    htf_df,
+                    htf_df2,
+                    no_signal_streak,
+                )
+                if fallback is not None:
+                    return fallback
             self.last_skip_reason = f"no_substrategy_signal(regime={regime.value})"
             return None
 

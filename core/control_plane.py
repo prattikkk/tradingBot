@@ -87,18 +87,19 @@ def drain_commands() -> list[dict]:
 
     commands: list[dict] = []
     try:
-        with COMMAND_QUEUE_PATH.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    parsed = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(parsed, dict):
-                    commands.append(parsed)
-    finally:
+        lines = COMMAND_QUEUE_PATH.read_text(encoding="utf-8").splitlines()
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                commands.append(parsed)
         COMMAND_QUEUE_PATH.write_text("", encoding="utf-8")
+    except Exception:
+        pass
 
     return commands

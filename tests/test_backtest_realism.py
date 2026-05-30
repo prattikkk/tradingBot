@@ -81,6 +81,7 @@ class BacktestRealismTests(unittest.TestCase):
         self.assertEqual(funding, 0.0)
         self.assertLess(exit_fill, 95.0)
         self.assertLess(pnl, 0.0)
+        self.assertEqual(bt._tie_events, 1)
 
     def test_htf_resample_builds_expected_bars(self):
         bt = self._make_backtest()
